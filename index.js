@@ -1693,7 +1693,7 @@ async function handleMediatorLeave(interaction) {
     content: "✅ Você saiu da fila de mediadores.",
     ephemeral: true,
   });
-}        
+}        components: [
           .addComponents(
             new ButtonBuilder()
               .setCustomId(
