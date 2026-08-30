@@ -1694,7 +1694,7 @@ async function handleButton(interaction) {
       Array.isArray(config.mediatorQueue)
         ? config.mediatorQueue
         : [];
-
+ephemeral: true,
     if (
       config.mediatorQueue.includes(
         interaction.user.id
