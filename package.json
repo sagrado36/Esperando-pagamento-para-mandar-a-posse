@@ -1,16 +1,11 @@
 {
-  "name": "bot-apostas-mediador",
+  "name": "discord-bot",
   "version": "1.0.0",
-  "description": "Bot de filas, apostas e mediadores para Discord",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
-  "engines": {
-    "node": ">=18.17.0"
-  },
   "dependencies": {
-    "discord.js": "^14.21.0",
-    "dotenv": "^16.6.1"
+    "discord.js": "^14.0.0"
   }
 }
