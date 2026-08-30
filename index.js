@@ -1693,8 +1693,8 @@ async function handleMediatorLeave(interaction) {
     content: "✅ Você saiu da fila de mediadores.",
     ephemeral: true,
   });
-}        components: [
-          new ActionRowBuilder().addComponents(
+}        
+          .addComponents(
             new ButtonBuilder()
               .setCustomId(
                 `med_winner|${betId}|${bet.player1}`
