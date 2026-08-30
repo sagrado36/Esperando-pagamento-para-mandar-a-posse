@@ -1,0 +1,15 @@
+{
+  "name": "bot-apostas-discord",
+  "version": "1.0.0",
+  "description": "Bot de filas e apostas para Discord",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "discord.js": "^14.25.1"
+  }
+}
