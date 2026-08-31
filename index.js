@@ -3237,16 +3237,6 @@ process.on(
   }
 );
 
-      process.on(
-  "unhandledRejection",
-  (error) => {
-    console.error(
-      "Unhandled Promise Rejection:",
-      error
-    );
-  }
-);
-
 process.on(
   "uncaughtException",
   (error) => {
