@@ -2506,10 +2506,7 @@ async function handleModalSubmit(interaction) {
               content:
                 "Use `.fila FORMATO MODALIDADE VALOR` para criar uma fila.",
               ephemeral: true,
-            });
-          }
-        }
-      } catch (error) {
+                    } catch (error) {
         console.error(
           "Erro na interação:",
           error
@@ -2521,22 +2518,25 @@ async function handleModalSubmit(interaction) {
         ) {
           await interaction
             .reply({
-              process.on(
-  "unhandledRejection",
-  (error) => {
-    console.error(
-      "Unhandled Promise Rejection:",
-      error
-    );
-  }
-);
+              content:
+                "❌ Ocorreu um erro ao processar esta ação.",
+              ephemeral: true,
+            })
+            .catch(() => {});
+        }
+      }
+    }
+  );
 
-if (
-  interaction.customId ===
-  "select_mediator_channel"
-) {
-  config.mediatorQueueChannelId =
-    selected;
+  process.on(
+    "unhandledRejection",
+    (error) => {
+      console.error(
+        "Unhandled Promise Rejection:",
+        error
+      );
+    }
+  );
 
   saveDatabase();
 
