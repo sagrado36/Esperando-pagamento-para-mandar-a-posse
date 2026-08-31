@@ -1632,7 +1632,7 @@ async function leaveQueue(
           `✅ Taxa do ADM configurada para ${formatMoney(fee)}.`,
         ephemeral: true,
       });
-    }
+    
 
     return interaction.reply({
       content:
