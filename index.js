@@ -2492,19 +2492,7 @@ async function handleModalSubmit(interaction) {
 ) {
   if (
     !isAdministrator(
-      interaction.member
-    )
-  ) {
-    return interaction.reply({
-      content:
-        "❌ Apenas administradores.",
-if (
-  interaction.commandName ===
-  "fila"
-) {
-  if (
-    !isAdministrator(
-      interaction.member
+            interaction.member
     )
   ) {
     return interaction.reply({
@@ -2513,6 +2501,22 @@ if (
       ephemeral: true,
     });
   }
+
+  if (
+    interaction.commandName ===
+    "fila"
+  ) {
+    if (
+      !isAdministrator(
+        interaction.member
+      )
+    ) {
+      return interaction.reply({
+        content:
+          "❌ Apenas administradores.",
+        ephemeral: true,
+      });
+    }
 
   return interaction.reply({
     content:
