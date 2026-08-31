@@ -3251,3 +3251,26 @@ client.login(TOKEN);
 
 
 console.log("Deploy Railway");
+  process.on(
+    "unhandledRejection",
+    (error) => {
+      console.error(
+        "Unhandled Promise Rejection:",
+        error
+      );
+    }
+  );
+
+  process.on(
+    "uncaughtException",
+    (error) => {
+      console.error(
+        "Uncaught Exception:",
+        error
+      );
+    }
+  );
+
+  client.login(TOKEN);
+
+  console.log("Deploy Railway");
