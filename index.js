@@ -2536,44 +2536,27 @@ async function handleModalSubmit(interaction) {
     (error) => {
       console.error(
         "Unhandled Promise Rejection:",
-        error
-      );
-    }
-  );
+        if (
+  interaction.customId ===
+  "select_mediator_channel"
+) {
+  config.mediatorQueueChannelId =
+    selected;
 
-  process.on(
-    "uncaughtException",
-    (error) => {
-      console.error(
-        "Uncaught Exception:",
-        error
-      );
-    }
-  );
-
-  client.login(
-    TOKEN
-  );
-    interaction.customId ===
-    "select_mediator_channel"
-  ) {
-    config.mediatorQueueChannelId =
-      selected;
-
-    saveDatabase();
-
-    return interaction.reply({
-      content:
-        "✅ Canal da fila de mediadores configurado.",
-      ephemeral: true,
-    });
-  }
+  saveDatabase();
 
   return interaction.reply({
     content:
-      "❌ Seleção de canal inválida.",
+      "✅ Canal da fila de mediadores configurado.",
     ephemeral: true,
   });
+}
+
+return interaction.reply({
+  content:
+    "❌ Seleção de canal inválida.",
+  ephemeral: true,
+});
 }
 
 async function handleStringSelect(
