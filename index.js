@@ -2888,12 +2888,20 @@ async function handleModal(interaction) {
     });
   }
 
-  return interaction.reply({
+    return interaction.reply({
     content:
       "❌ Formulário inválido.",
     ephemeral: true,
   });
 }
+
+    } catch (error) {
+      console.error(
+        "Erro no interactionCreate:",
+        error
+      );
+    }
+  });
 
 client.on(
   "messageCreate",
