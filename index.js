@@ -968,7 +968,7 @@ async function createPrivateBetChannel(
       ...players.map((id) => `<@${id}>`),
       `<@${mediator}>`,
     ]),
-  ].join(" "));
+  ].join(" ");
 
   await channel.send({
     content: mentions,
