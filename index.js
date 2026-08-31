@@ -968,7 +968,7 @@ async function createPrivateBetChannel(
       ...players.map((id) => `<@${id}>`),
       `<@${mediator}>`,
     ]),
-  ].join(" ");
+  ].join(" "));
 
   await channel.send({
     content: mentions,
@@ -1626,7 +1626,8 @@ async function leaveQueue(
       ephemeral: true,
     }
   );
-}      return interaction.reply({
+}
+      return interaction.reply({
         content:
           `✅ Taxa do ADM configurada para ${formatMoney(fee)}.`,
         ephemeral: true,
@@ -2561,7 +2562,8 @@ async function leaveQueue(
 
   client.login(
     TOKEN
-  );    interaction.customId ===
+  );
+    interaction.customId ===
     "select_mediator_channel"
   ) {
     config.mediatorQueueChannelId =
