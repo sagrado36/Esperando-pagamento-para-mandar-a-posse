@@ -1627,28 +1627,21 @@ async function leaveQueue(
     }
   );
 }
-      return interaction.reply({
-        content:
-          `✅ Taxa do ADM configurada para ${formatMoney(fee)}.`,
-        ephemeral: true,
-      });
-    
+return interaction.reply({
+  content:
+    `✅ Taxa do ADM configurada para ${formatMoney(fee)}.`,
+  ephemeral: true,
+});
 
-    return interaction.reply({
-      content:
-        "❌ Seleção inválida.",
-      ephemeral: true,
-    });
-  }
+}
 
-  async function handleModalSubmit(interaction) {
-    const id = interaction.customId;
+async function handleModalSubmit(interaction) {
+  const id = interaction.customId;
 
-    if (id === "pix_modal") {
-      if (
-        !isAdministrator(
-          interaction.member
-        )
+  if (id === "pix_modal") {
+    if (
+      !isAdministrator(
+        interaction.member)
       ) {
         return interaction.reply({
           content:
