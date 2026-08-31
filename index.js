@@ -2498,6 +2498,18 @@ async function handleModalSubmit(interaction) {
     return interaction.reply({
       content:
         "❌ Apenas administradores.",
+if (
+  interaction.commandName ===
+  "fila"
+) {
+  if (
+    !isAdministrator(
+      interaction.member
+    )
+  ) {
+    return interaction.reply({
+      content:
+        "❌ Apenas administradores.",
       ephemeral: true,
     });
   }
@@ -2508,17 +2520,6 @@ async function handleModalSubmit(interaction) {
     ephemeral: true,
   });
 }
-            .reply({
-              content:
-                "❌ Ocorreu um erro ao processar esta ação.",
-              ephemeral: true,
-            })
-            .catch(() => {});
-        }
-      }
-    }
-  );
-
   process.on(
     "unhandledRejection",
     (error) => {
