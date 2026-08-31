@@ -2486,37 +2486,28 @@ async function handleModalSubmit(interaction) {
             });
           }
 
-          if (
-            interaction.commandName ===
-            "fila"
-          ) {
             if (
-              !isAdministrator(
-                interaction.member
-              )
-            ) {
-              return interaction.reply({
-                content:
-                  "❌ Apenas administradores.",
-                ephemeral: true,
-              });
-            }
+  interaction.commandName ===
+  "fila"
+) {
+  if (
+    !isAdministrator(
+      interaction.member
+    )
+  ) {
+    return interaction.reply({
+      content:
+        "❌ Apenas administradores.",
+      ephemeral: true,
+    });
+  }
 
-            return interaction.reply({
-              content:
-                "Use `.fila FORMATO MODALIDADE VALOR` para criar uma fila.",
-              ephemeral: true,
-                    } catch (error) {
-        console.error(
-          "Erro na interação:",
-          error
-        );
-
-        if (
-          !interaction.replied &&
-          !interaction.deferred
-        ) {
-          await interaction
+  return interaction.reply({
+    content:
+      "Use `.fila FORMATO MODALIDADE VALOR` para criar uma fila.",
+    ephemeral: true,
+  });
+}
             .reply({
               content:
                 "❌ Ocorreu um erro ao processar esta ação.",
