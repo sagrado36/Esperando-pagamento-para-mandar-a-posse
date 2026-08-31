@@ -2521,22 +2521,17 @@ async function handleModalSubmit(interaction) {
         ) {
           await interaction
             .reply({
-              content:
-                "❌ Ocorreu um erro ao processar esta ação.",
-              ephemeral: true,
-            })
-            .catch(() => {});
-        }
-      }
-    }
-  );
+              process.on(
+  "unhandledRejection",
+  (error) => {
+    console.error(
+      "Unhandled Promise Rejection:",
+      error
+    );
+  }
+);
 
-  process.on(
-    "unhandledRejection",
-    (error) => {
-      console.error(
-        "Unhandled Promise Rejection:",
-        if (
+if (
   interaction.customId ===
   "select_mediator_channel"
 ) {
