@@ -1611,13 +1611,18 @@ async function joinQueue(
   bet
 ) {
   if (
+    bet.finished ||
+    bet.cancelled
+  ) {
+    return sendSafeReply(
+      interaction,
+      {
+        content:
           "❌ Esta aposta já foi finalizada ou cancelada.",
-
         ephemeral: true,
       }
     );
   }
-
   if (
     !mediatorBelongsToBet(
       bet,
