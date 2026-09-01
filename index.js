@@ -1988,51 +1988,30 @@ async function joinQueue(
           mode,
           Number(value),
           players
+            if (queue.length === 2) {
+    const players = [...queue];
+
+    queue.length = 0;
+
+    saveDatabase();
+
+    try {
+      const result =
+        await createPrivateBetChannel(
+          interaction.guild,
+          format,
+          mode,
+          Number(value),
+          players
         );
-
-      return sendSafeReply(
-        interaction,
-        {
-          content:
-            `🎰 Aposta criada em ${result.channel}.`,
-
-          ephemeral: true,
-        }
-      );
-    } catch (error) {
-      console.error(
-        "Erro ao criar aposta:",
-        error
-      );
-
-              for (const id of players) {
-        queue.push(id);
-      }
-
-      saveDatabase();
 
       await sendSafeReply(
         interaction,
         {
           content:
-            `❌ Não foi possível criar a aposta: ${error.message}`,
-
+            `🎰 Aposta criada em ${result.channel}.`,
           ephemeral: true,
         }
-      );
-    }
-  }
-
-  return sendSafeReply(
-    interaction,
-    {
-      content:
-        "✅ Você entrou na fila.",
-
-      ephemeral: true,
-    }
-  );
-}
       );
     } catch (error) {
       console.error(
@@ -2045,6 +2024,27 @@ async function joinQueue(
       }
 
       saveDatabase();
+
+      await sendSafeReply(
+        interaction,
+        {
+          content:
+            `❌ Não foi possível criar a aposta: ${error.message}`,
+          ephemeral: true,
+        }
+      );
+    }
+  } else {
+    await sendSafeReply(
+      interaction,
+      {
+        content:
+          "✅ Você entrou na fila.",
+        ephemeral: true,
+      }
+    );
+  }
+}
 
       await sendSafeReply(
         interaction,
