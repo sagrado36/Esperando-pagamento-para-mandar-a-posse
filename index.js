@@ -1626,11 +1626,12 @@ async function joinQueue(
     !mediatorBelongsToBet(
       bet,
       interaction.user.id
+        if (
+    !mediatorBelongsToBet(
+      bet,
+      interaction.user.id
     )
   ) {
-    return sendSafeReply(
-      interaction,
-      {
         content:
           "❌ Você não é o mediador responsável por esta aposta.",
 
