@@ -1998,141 +1998,141 @@ async function joinQueue(
       format,
       mode,
       value,
-      type
-    );
+      async function handleCommand(
+  message
+) {
+  const content =
+    message.content.trim();
 
-  if (
-    queueAlreadyContains(
-      queue,
-      interaction.user.id
-    )
-  ) {
-    return sendSafeReply(
-      interaction,
-      {
-        content:
-          "❌ Você já está nesta fila.",
-        ephemeral: true,
-      }
-    );
+  if (!content.startsWith(PREFIX)) {
+    return;
   }
 
-  if (queue.length >= 2) {
-    return sendSafeReply(
-      interaction,
-      {
-        content:
-          "❌ Esta fila já está cheia.",
-        ephemeral: true,
-      }
-    );
+  const args =
+    content
+      .slice(PREFIX.length)
+      .trim()
+      .split(/\s+/);
+
+  const command =
+    args.shift()?.toLowerCase();
+
+  if (!command) {
+    return;
   }
 
-  for (
-    const key of Object.keys(db.queues)
-  ) {
+  if (command === "conf") {
     if (
-      Array.isArray(
-        db.queues[key]
+      !isAdministrator(
+        message.member
       )
     ) {
-      db.queues[key] =
-        db.queues[key].filter(
-          id =>
-            id !==
-            interaction.user.id
-        );
-    }
-  }
-
-  queue.push(
-    interaction.user.id
-  );
-
-  saveDatabase();
-
-  await refreshQueueMessage(
-    interaction.message
-  );
-
-  if (queue.length === 2) {
-    const players = [...queue];
-
-    queue.length = 0;
-
-    saveDatabase();
-
-    try {
-      const result =
-        await createPrivateBetChannel(
-          interaction.guild,
-          format,
-          mode,
-          Number(value),
-          players
-        );
-
-      return sendSafeReply(
-        interaction,
-        {
-          content:
-            `🎰 Aposta criada em ${result.channel}.`,
-          ephemeral: true,
-        }
-      );
-    } catch (error) {
-      console.error(
-        "Erro ao criar aposta:",
-        error
-      );
-
-      for (
-        const id of players
-      ) {
-        queue.push(id);
-      }
-
-      saveDatabase();
-
-      return sendSafeReply(
-        interaction,
-        {
-          content:
-            `❌ Não foi possível criar a aposta: ${error.message}`,
-          ephemeral: true,
-        }
+      return message.reply(
+        "❌ Apenas administradores podem usar este comando."
       );
     }
+
+    return message.channel.send({
+      embeds: [
+        configMainEmbed(
+          message.guild
+        ),
+      ],
+      components:
+        configButtons(),
+    });
   }
 
-          
-      interaction,
-      {
-        content:
-          "✅ Você entrou na fila.",
-        ephemeral: true,
-      }
+  if (
+    command === "fila"
+  ) {
+    if (
+      !isAdministrator(
+        message.member
+      )
+    ) {
+      return message.reply(
+        "❌ Apenas administradores podem criar painéis de fila."
+      );
+    }
+
+    const format =
+      args[0] || "1x1";
+
+    const mode =
+      args[1] || "mobile";
+
+    const value =
+      Number(args[2]) || 100;
+
+    if (
+      !FORMATS.includes(
+        format
+      )
+    ) {
+      return message.reply(
+        "❌ Formato inválido."
+      );
+    }
+
+    if (
+      !MODES.includes(
+        mode
+      )
+    ) {
+      return message.reply(
+        "❌ Modalidade inválida."
+      );
+    }
+
+    if (
+      !VALUES.includes(
+        value
+      )
+    ) {
+      return message.reply(
+        "❌ Valor inválido."
+      );
+    }
+
+    const type =
+      format === "1x1"
+        ? "normal"
+        : "normal";
+
+    return createQueueMessage(
+      message.channel,
+      message.guild.id,
+      format,
+      mode,
+      value,
+      type
     );
   }
-}
 
-      await sendSafeReply(
-        interaction,
-        {
-          content:
-            `❌ Não foi possível criar a aposta: ${error.message}`,
-
-          ephemeral: true,
-        }
+  if (
+    command === "medfila"
+  ) {
+    if (
+      !isAdministrator(
+        message.member
+      )
+    ) {
+      return message.reply(
+        "❌ Apenas administradores podem criar a fila de mediadores."
       );
     }
-  }
-    }
-  }
 
-  return sendSafeReply(
-    interaction,
-    {
+    return message.channel.send({
+      embeds: [
+        mediatorQueueEmbed(
+          message.guild.id
+        ),
+      ],
+      components:
+        mediatorQueueButtons(),
+    });
+  }
       content:
         "✅ Você entrou na fila.",
 
