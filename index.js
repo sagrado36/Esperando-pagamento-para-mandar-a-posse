@@ -4641,8 +4641,7 @@ async function handleCommand(
       ],
     });
   }
-}
-client.login(process.env.DISCORD_TOKEN)
+}client.login(process.env.DISCORD_TOKEN)
   .then(() => {
     console.log(`🤖 Bot online como ${client.user.tag}`);
   })
