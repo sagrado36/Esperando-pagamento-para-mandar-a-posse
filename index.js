@@ -1607,21 +1607,21 @@ async function joinQueue(
   return sendSafeReply(
     interaction,
     {
-      embeds: [
-        createEmbed(
-          bet.guildId,
-          "🏆 APOSTA FINALIZADA",
-
-          `🏆 **Vencedor:** <@${winnerId}>\n` +
-            `❌ **Derrotado:** <@${loserId}>\n\n` +
-            `🪙 **Premiação:** ${formatMoney(
-              Number(bet.value) * 2
-            )}`
-        ),
-      ],
+        return sendSafeReply(
+    interaction,
+    {
+      content:
+        "✅ Você entrou na fila.",
+      ephemeral: true,
     }
   );
 }
+
+async function handleWO(
+  interaction,
+  bet
+) {
+  if (
 
 async function handleWO(
   interaction,
