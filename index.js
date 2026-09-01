@@ -1465,77 +1465,28 @@ async function createPrivateBetChannel(
   };
 }
 
-async function cancelBet(
-  bet,
-  channel
-) {
-  bet.cancelled = true;
-
-  saveDatabase();
-
-  await channel
-    .send({
-      embeds: [
-        createEmbed(
-          bet.guildId,
-          "❌ APOSTA CANCELADA",
-          "Esta aposta foi cancelada."
-        ),
-      ],
-    })
-    .catch(() => {});
-
-  setTimeout(() => {
-    channel
-      .delete()
-      .catch(() => {});
-  }, 5000);
-}
-
-async function finishBet(
-  bet,
-  channel
-) {
-  bet.finished = true;
-
-  saveDatabase();
-
-  await channel
-    .send({
-      embeds: [
-        createEmbed(
-          bet.guildId,
-          "✅ APOSTA FINALIZADA",
-          "A aposta foi finalizada pelo mediador."
-        ),
-      ],
-    })
-    .catch(() => {});
-}
-
-async function chooseWinner(
+async function joinQueue(
   interaction,
-  bet,
-  winnerId
+  format,
+  mode,
+  value,
+  type
 ) {
-  if (
-    bet.finished ||
-    bet.cancelled
-  ) {
-    return sendSafeReply(
-      interaction,
-      {
-        content:
-          "❌ Esta aposta já foi finalizada ou cancelada.",
+  const guildId =
+    interaction.guild.id;
 
-        ephemeral: true,
-      }
+  const queue =
+    getQueue(
+      guildId,
+      format,
+      mode,
+      value,
+      type
     );
-  }
 
   if (
-    !mediatorBelongsToBet(
-      bet,
+    queueAlreadyContains(
+      queue,
       interaction.user.id
     )
   ) {
@@ -1543,59 +1494,113 @@ async function chooseWinner(
       interaction,
       {
         content:
-          "❌ Você não é o mediador responsável por esta aposta.",
-
+          "❌ Você já está nesta fila.",
         ephemeral: true,
       }
     );
   }
 
-  if (
-    !playerBelongsToBet(
-      bet,
-      winnerId
-    )
-  ) {
+  if (queue.length >= 2) {
     return sendSafeReply(
       interaction,
       {
         content:
-          "❌ Jogador inválido.",
-
+          "❌ Esta fila já está cheia.",
         ephemeral: true,
       }
     );
   }
 
-  const loserId =
-    winnerId === bet.player1
-      ? bet.player2
-      : bet.player1;
+  for (
+    const key of Object.keys(
+      db.queues
+    )
+  ) {
+    if (
+      Array.isArray(
+        db.queues[key]
+      )
+    ) {
+      db.queues[key] =
+        db.queues[key].filter(
+          id =>
+            id !==
+            interaction.user.id
+        );
+    }
+  }
 
-  const winner =
-    getUserData(
-      winnerId
-    );
+  queue.push(
+    interaction.user.id
+  );
 
-  const loser =
-    getUserData(
-      loserId
-    );
+  saveDatabase();
 
-  winner.wins += 1;
+  await refreshQueueMessage(
+    interaction.message
+  );
 
-  loser.losses += 1;
+  if (queue.length === 2) {
+    const players = [
+      ...queue
+    ];
 
-  winner.coins +=
-    Number(bet.value) * 2;
+    queue.length = 0;
 
-  bet.finished = true;
+    saveDatabase();
 
-  bet.winner =
-    winnerId;
+    try {
+      const result =
+        await createPrivateBetChannel(
+          interaction.guild,
+          format,
+          mode,
+          Number(value),
+          players
+        );
 
-  bet.loser =
-    loserId;
+      return sendSafeReply(
+        interaction,
+        {
+          content:
+            `🎰 Aposta criada em ${result.channel}.`,
+          ephemeral: true,
+        }
+      );
+    } catch (error) {
+      console.error(
+        "Erro ao criar aposta:",
+        error
+      );
+
+      for (
+        const id of players
+      ) {
+        queue.push(id);
+      }
+
+      saveDatabase();
+
+      return sendSafeReply(
+        interaction,
+        {
+          content:
+            `❌ Não foi possível criar a aposta: ${error.message}`,
+          ephemeral: true,
+        }
+      );
+    }
+  }
+
+  return sendSafeReply(
+    interaction,
+    {
+      content:
+        "✅ Você entrou na fila.",
+      ephemeral: true,
+    }
+  );
+}
 
   saveDatabase();
 
