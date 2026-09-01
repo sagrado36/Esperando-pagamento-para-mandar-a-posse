@@ -1581,16 +1581,14 @@ async function joinQueue(
 
       saveDatabase();
 
-      return sendSafeReply(
+            return sendSafeReply(
         interaction,
         {
-            `❌ Não foi possível criar a aposta: ${error.message}`,
           content:
+            `❌ Não foi possível criar a aposta: ${error.message}`,
           ephemeral: true,
         }
       );
-    }
-  }
 
   return sendSafeReply(
     interaction,
