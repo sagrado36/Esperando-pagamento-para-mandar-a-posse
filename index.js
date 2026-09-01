@@ -2006,16 +2006,18 @@ async function joinQueue(
       );
 
       for (
-        const id of players
-      ) {
-        queue.push(id);
-      }
+          return sendSafeReply(
+    interaction,
+    {
+      content:
+        "✅ Você saiu da fila.",
 
-      saveDatabase();
+      ephemeral: true,
+    }
+  );
+}
 
-      return sendSafeReply(
-        interaction,
-        {
+async function handleConfigButton(interaction) {
           content:
             `❌ Não foi possível criar a aposta: ${error.message}`,
 
