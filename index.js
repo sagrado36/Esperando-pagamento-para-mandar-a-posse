@@ -2006,7 +2006,7 @@ async function joinQueue(
       );
 
       for (
-          return sendSafeReply(
+   return sendSafeReply(
     interaction,
     {
       content:
