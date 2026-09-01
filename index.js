@@ -1982,20 +1982,7 @@ async function joinQueue(
 
     try {
       const result =
-        await createPrivateBetChannel(
-          interaction.guild,
-          format,
-          mode,
-          Number(value),
-          players
-            if (queue.length === 2) {
-    const players = [...queue];
-
-    queue.length = 0;
-
-    saveDatabase();
-
-    try {
+            try {
       const result =
         await createPrivateBetChannel(
           interaction.guild,
@@ -2021,6 +2008,19 @@ async function joinQueue(
 
       for (const id of players) {
         queue.push(id);
+      }
+
+      saveDatabase();
+
+      await sendSafeReply(
+        interaction,
+        {
+          content:
+            `❌ Não foi possível criar a aposta: ${error.message}`,
+          ephemeral: true,
+        }
+      );
+    }
       }
 
       saveDatabase();
