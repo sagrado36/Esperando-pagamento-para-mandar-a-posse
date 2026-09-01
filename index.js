@@ -2006,7 +2006,31 @@ async function joinQueue(
       );
 
       for (
-              for (const id of players) {
+              const result =
+        await createPrivateBetChannel(
+          interaction.guild,
+          format,
+          mode,
+          Number(value),
+          players
+        );
+
+      return sendSafeReply(
+        interaction,
+        {
+          content:
+            `🎰 Aposta criada em ${result.channel}.`,
+
+          ephemeral: true,
+        }
+      );
+    } catch (error) {
+      console.error(
+        "Erro ao criar aposta:",
+        error
+      );
+
+      for (const id of players) {
         queue.push(id);
       }
 
@@ -2023,19 +2047,6 @@ async function joinQueue(
       );
     }
   }
-
-  return sendSafeReply(
-    interaction,
-    {
-      content:
-        "✅ Você entrou na fila.",
-
-      ephemeral: true,
-    }
-  );
-}
-
-async function handleConfigButton(interaction) {
     }
   }
 
