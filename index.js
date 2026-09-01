@@ -1617,27 +1617,23 @@ async function joinQueue(
     return sendSafeReply(
       interaction,
       {
-        content:
-          "❌ Esta aposta já foi finalizada ou cancelada.",
-        ephemeral: true,
-      }
-    );
-  }
-    !mediatorBelongsToBet(
-      bet,
-      interaction.user.id
-        if (
+          }
+
+  if (
     !mediatorBelongsToBet(
       bet,
       interaction.user.id
     )
   ) {
+    return sendSafeReply(
+      interaction,
+      {
         content:
           "❌ Você não é o mediador responsável por esta aposta.",
-
         ephemeral: true,
       }
     );
+  }
   }
 
   bet.finished = true;
