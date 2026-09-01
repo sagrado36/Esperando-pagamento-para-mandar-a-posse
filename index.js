@@ -2005,7 +2005,6 @@ async function joinQueue(
         error
       );
 
-      for (
               for (const id of players) {
         queue.push(id);
       }
