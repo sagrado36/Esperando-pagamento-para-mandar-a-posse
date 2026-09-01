@@ -1637,17 +1637,10 @@ async function joinQueue(
           "❌ Você não é o mediador responsável por esta aposta.",
         ephemeral: true,
       }
-      
-      }
     );
-  }
-      }
-    );
-  }
   }
 
   bet.finished = true;
-
   bet.wo = true;
 
   saveDatabase();
@@ -1658,6 +1651,13 @@ async function joinQueue(
       embeds: [
         createEmbed(
           bet.guildId,
+          "⚠️ VITÓRIA POR W.O.",
+          "A aposta foi encerrada por W.O.\n\nNenhuma vitória ou derrota foi adicionada."
+        ),
+      ],
+    }
+  );
+}
           "⚠️ VITÓRIA POR W.O.",
           "A aposta foi encerrada por W.O.\n\nNenhuma vitória ou derrota foi adicionada."
         ),
