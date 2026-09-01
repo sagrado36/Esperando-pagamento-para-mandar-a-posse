@@ -1611,6 +1611,10 @@ async function joinQueue(
   bet
 ) {
   if (
+    bet.finished ||
+    bet.cancelled
+  ) {
+    return sendSafeReply(
       interaction,
       {
         content:
@@ -1619,7 +1623,6 @@ async function joinQueue(
       }
     );
   }
-  if (
     !mediatorBelongsToBet(
       bet,
       interaction.user.id
