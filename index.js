@@ -2006,23 +2006,34 @@ async function joinQueue(
       );
 
       for (
-              const result =
-        await createPrivateBetChannel(
-          interaction.guild,
-          format,
-          mode,
-          Number(value),
-          players
-        );
+              for (const id of players) {
+        queue.push(id);
+      }
 
-      return sendSafeReply(
+      saveDatabase();
+
+      await sendSafeReply(
         interaction,
         {
           content:
-            `🎰 Aposta criada em ${result.channel}.`,
+            `❌ Não foi possível criar a aposta: ${error.message}`,
 
           ephemeral: true,
         }
+      );
+    }
+  }
+
+  return sendSafeReply(
+    interaction,
+    {
+      content:
+        "✅ Você entrou na fila.",
+
+      ephemeral: true,
+    }
+  );
+}
       );
     } catch (error) {
       console.error(
