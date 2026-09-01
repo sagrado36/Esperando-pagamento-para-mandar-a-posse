@@ -1607,19 +1607,7 @@ async function joinQueue(
   return sendSafeReply(
     interaction,
     {
-        return sendSafeReply(
-    interaction,
-    {
-      content:
-        "✅ Você entrou na fila.",
-      ephemeral: true,
-    }
-  );
-}
-
-async function handleWO(
-  interaction,
-  bet
+      
 ) {
   if (
 
