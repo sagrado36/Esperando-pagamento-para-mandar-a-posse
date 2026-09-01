@@ -1608,13 +1608,6 @@ async function joinQueue(
     interaction,
     {
       
-) {
-  if (
-
-async function handleWO(
-  interaction,
-  bet
-) {
   if (
     bet.finished ||
     bet.cancelled
