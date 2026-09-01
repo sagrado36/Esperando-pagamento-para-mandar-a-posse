@@ -1606,12 +1606,11 @@ async function joinQueue(
 
   return sendSafeReply(
     interaction,
-    {
-      
-    return sendSafeReply(
-      interaction,
-      {
-        content:
+    async function handleWO(
+  interaction,
+  bet
+) {
+  if (
           "❌ Esta aposta já foi finalizada ou cancelada.",
 
         ephemeral: true,
