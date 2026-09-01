@@ -1584,8 +1584,8 @@ async function joinQueue(
       return sendSafeReply(
         interaction,
         {
-          content:
             `❌ Não foi possível criar a aposta: ${error.message}`,
+          content:
           ephemeral: true,
         }
       );
@@ -1658,6 +1658,10 @@ async function joinQueue(
     }
   );
 }
+
+function mediatorMenu(
+  betId
+) {
 
 function mediatorMenu(
   betId
