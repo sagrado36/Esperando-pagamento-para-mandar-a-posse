@@ -1625,9 +1625,20 @@ async function joinQueue(
   }
 
   if (
-  if (
     !mediatorBelongsToBet(
       bet,
+      interaction.user.id
+    )
+  ) {
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          "❌ Você não é o mediador responsável por esta aposta.",
+        ephemeral: true,
+      }
+    );
+  }
       interaction.user.id
     )
   ) {
