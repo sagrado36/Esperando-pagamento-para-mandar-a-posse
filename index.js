@@ -2006,11 +2006,29 @@ async function joinQueue(
       );
 
       for (
-   return sendSafeReply(
+              for (const id of players) {
+        queue.push(id);
+      }
+
+      saveDatabase();
+
+      await sendSafeReply(
+        interaction,
+        {
+          content:
+            `❌ Não foi possível criar a aposta: ${error.message}`,
+
+          ephemeral: true,
+        }
+      );
+    }
+  }
+
+  return sendSafeReply(
     interaction,
     {
       content:
-        "✅ Você saiu da fila.",
+        "✅ Você entrou na fila.",
 
       ephemeral: true,
     }
@@ -2018,12 +2036,6 @@ async function joinQueue(
 }
 
 async function handleConfigButton(interaction) {
-          content:
-            `❌ Não foi possível criar a aposta: ${error.message}`,
-
-          ephemeral: true,
-        }
-      );
     }
   }
 
