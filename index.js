@@ -1982,7 +1982,87 @@ async function joinQueue(
 
     try {
       const result =
-            try {
+        async function joinQueue(
+  interaction,
+  format,
+  mode,
+  value,
+  type
+) {
+  const guildId =
+    interaction.guild.id;
+
+  const queue =
+    getQueue(
+      guildId,
+      format,
+      mode,
+      value,
+      type
+    );
+
+  if (
+    queueAlreadyContains(
+      queue,
+      interaction.user.id
+    )
+  ) {
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          "❌ Você já está nesta fila.",
+        ephemeral: true,
+      }
+    );
+  }
+
+  if (queue.length >= 2) {
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          "❌ Esta fila já está cheia.",
+        ephemeral: true,
+      }
+    );
+  }
+
+  for (
+    const key of Object.keys(db.queues)
+  ) {
+    if (
+      Array.isArray(
+        db.queues[key]
+      )
+    ) {
+      db.queues[key] =
+        db.queues[key].filter(
+          id =>
+            id !==
+            interaction.user.id
+        );
+    }
+  }
+
+  queue.push(
+    interaction.user.id
+  );
+
+  saveDatabase();
+
+  await refreshQueueMessage(
+    interaction.message
+  );
+
+  if (queue.length === 2) {
+    const players = [...queue];
+
+    queue.length = 0;
+
+    saveDatabase();
+
+    try {
       const result =
         await createPrivateBetChannel(
           interaction.guild,
@@ -1992,7 +2072,7 @@ async function joinQueue(
           players
         );
 
-      await sendSafeReply(
+      return sendSafeReply(
         interaction,
         {
           content:
@@ -2006,13 +2086,15 @@ async function joinQueue(
         error
       );
 
-      for (const id of players) {
+      for (
+        const id of players
+      ) {
         queue.push(id);
       }
 
       saveDatabase();
 
-      await sendSafeReply(
+      return sendSafeReply(
         interaction,
         {
           content:
@@ -2021,19 +2103,17 @@ async function joinQueue(
         }
       );
     }
-      }
+  }
 
-      saveDatabase();
-
-      await sendSafeReply(
-        interaction,
-        {
-          content:
-            `❌ Não foi possível criar a aposta: ${error.message}`,
-          ephemeral: true,
-        }
-      );
+  return sendSafeReply(
+    interaction,
+    {
+      content:
+        "✅ Você entrou na fila.",
+      ephemeral: true,
     }
+  );
+}
   } else {
     await sendSafeReply(
       interaction,
