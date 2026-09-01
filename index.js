@@ -1461,10 +1461,6 @@ async function createPrivateBetChannel(
     channel,
 
     bet:
-      db.bets[betId],
-  };
-}
-
 async function joinQueue(
   interaction,
   format,
@@ -1500,7 +1496,12 @@ async function joinQueue(
     );
   }
 
-  if (queue.length >= 2) {
+  const needed =
+    requiredPlayers(format);
+
+  if (
+    queue.length >= needed
+  ) {
     return sendSafeReply(
       interaction,
       {
@@ -1523,7 +1524,7 @@ async function joinQueue(
     ) {
       db.queues[key] =
         db.queues[key].filter(
-          id =>
+          (id) =>
             id !==
             interaction.user.id
         );
@@ -1540,10 +1541,11 @@ async function joinQueue(
     interaction.message
   );
 
-  if (queue.length === 2) {
-    const players = [
-      ...queue
-    ];
+  if (
+    queue.length >= needed
+  ) {
+    const players =
+      [...queue];
 
     queue.length = 0;
 
@@ -1581,7 +1583,7 @@ async function joinQueue(
 
       saveDatabase();
 
-            return sendSafeReply(
+      return sendSafeReply(
         interaction,
         {
           content:
@@ -1589,6 +1591,8 @@ async function joinQueue(
           ephemeral: true,
         }
       );
+    }
+  }
 
   return sendSafeReply(
     interaction,
@@ -1600,11 +1604,7 @@ async function joinQueue(
   );
 }
 
-  saveDatabase();
-
-  return sendSafeReply(
-    interaction,
-    async function handleWO(
+async function handleWO(
   interaction,
   bet
 ) {
@@ -1660,21 +1660,6 @@ async function joinQueue(
 function mediatorMenu(
   betId
 ) {
-
-function mediatorMenu(
-  betId
-) {
-          "⚠️ VITÓRIA POR W.O.",
-          "A aposta foi encerrada por W.O.\n\nNenhuma vitória ou derrota foi adicionada."
-        ),
-      ],
-    }
-  );
-}
-
-function mediatorMenu(
-  betId
-) {
   return [
     new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
@@ -1688,32 +1673,24 @@ function mediatorMenu(
           {
             label:
               "🏆 Escolher vencedor",
-
             value:
               "winner",
-
             description:
               "Escolher o vencedor da aposta.",
           },
-
           {
             label:
               "⚠️ Vitória por W.O.",
-
             value:
               "wo",
-
             description:
               "Encerrar por W.O.",
           },
-
           {
             label:
               "✅ Finalizar aposta",
-
             value:
               "finish",
-
             description:
               "Finalizar sem registrar resultado.",
           }
@@ -1776,6 +1753,167 @@ async function showRoomCredentials(
         .setStyle(
           ButtonStyle.Secondary
         ),
+
+      new ButtonBuilder()
+        .setCustomId(
+          `copy_room_password|${bet.id}`
+        )
+        .setLabel(
+          "🔑 Copiar senha"
+        )
+        .setStyle(
+          ButtonStyle.Secondary
+        )
+    ),
+  ];
+
+  return sendSafeReply(
+    interaction,
+    {
+      embeds: [
+        createEmbed(
+          bet.guildId,
+          "🎮 SALA DA APOSTA",
+          description
+        ),
+      ],
+      components: buttons,
+    }
+  );
+}
+
+async function handleRoomCredentials(
+  message,
+  bet
+) {
+  const content =
+    message.content.trim();
+
+  const match =
+    content.match(
+      /(?:id|sala)\s*[:=-]?\s*(\d+)[\s\S]*?(?:senha|pass|password)\s*[:=-]?\s*(\S+)/i
+    );
+
+  if (!match) {
+    return false;
+  }
+
+  const roomId =
+    match[1];
+
+  const password =
+    match[2];
+
+  bet.roomId =
+    roomId;
+
+  bet.roomPassword =
+    password;
+
+  bet.roomCreated =
+    true;
+
+  saveDatabase();
+
+  const total =
+    Number(bet.value) * 2;
+
+  await message.channel.send({
+    embeds: [
+      createEmbed(
+        bet.guildId,
+        "🎮 SALA CRIADA",
+
+        `🆔 **ID:** \`${roomId}\`\n` +
+          `🔐 **Senha:** \`${password}\`\n\n` +
+          `💰 **Premiação:** ${formatMoney(
+            total
+          )}`
+      ),
+    ],
+
+    components: [
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(
+            `copy_room_id|${bet.id}`
+          )
+          .setLabel(
+            "📋 Copiar ID"
+          )
+          .setStyle(
+            ButtonStyle.Secondary
+          ),
+
+        new ButtonBuilder()
+          .setCustomId(
+            `copy_room_password|${bet.id}`
+          )
+          .setLabel(
+            "🔑 Copiar senha"
+          )
+          .setStyle(
+            ButtonStyle.Secondary
+          )
+      ),
+    ],
+  });
+
+  return true;
+}
+
+async function leaveQueue(
+  interaction,
+  format,
+  mode,
+  value,
+  type
+) {
+  const queue =
+    getQueue(
+      interaction.guild.id,
+      format,
+      mode,
+      value,
+      type
+    );
+
+  const index =
+    queue.indexOf(
+      interaction.user.id
+    );
+
+  if (index === -1) {
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          "❌ Você não está nesta fila.",
+        ephemeral: true,
+      }
+    );
+  }
+
+  queue.splice(
+    index,
+    1
+  );
+
+  saveDatabase();
+
+  await refreshQueueMessage(
+    interaction.message
+  );
+
+  return sendSafeReply(
+    interaction,
+    {
+      content:
+        "✅ Você saiu da fila.",
+      ephemeral: true,
+    }
+  );
+}
 
       new ButtonBuilder()
         .setCustomId(
