@@ -1608,10 +1608,6 @@ async function joinQueue(
     interaction,
     {
       
-  if (
-    bet.finished ||
-    bet.cancelled
-  ) {
     return sendSafeReply(
       interaction,
       {
