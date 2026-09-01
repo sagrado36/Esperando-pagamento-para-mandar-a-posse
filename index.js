@@ -1627,11 +1627,7 @@ async function leaveQueue(
     }
       );
 }
-return interaction.reply({
-  content:
-    `✅ Taxa do ADM configurada para ${formatMoney(fee)}.`,
-  ephemeral: true,
-});
+
 
 async function handleModalSubmit(interaction) {
   const id = interaction.customId;
