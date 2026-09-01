@@ -4641,10 +4641,7 @@ async function handleCommand(
       ],
     });
   }
-}client.login(process.env.DISCORD_TOKEN)
-  .then(() => {
-    console.log(`🤖 Bot online como ${client.user.tag}`);
-  })
-  .catch((error) => {
-    console.error("❌ Erro ao fazer login:", error);
-  });
+}
+client.login(
+  TOKEN
+);
