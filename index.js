@@ -2105,17 +2105,7 @@ async function joinQueue(
     }
   }
 
-  return sendSafeReply(
-    interaction,
-    {
-      content:
-        "✅ Você entrou na fila.",
-      ephemeral: true,
-    }
-  );
-}
-  } else {
-    await sendSafeReply(
+          
       interaction,
       {
         content:
