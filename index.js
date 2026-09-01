@@ -1658,6 +1658,10 @@ async function joinQueue(
     }
   );
 }
+
+function mediatorMenu(
+  betId
+) {
           "⚠️ VITÓRIA POR W.O.",
           "A aposta foi encerrada por W.O.\n\nNenhuma vitória ou derrota foi adicionada."
         ),
