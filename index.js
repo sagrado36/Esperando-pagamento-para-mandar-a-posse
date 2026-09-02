@@ -1232,93 +1232,128 @@ async function confirmBet(
 
       embeds: [
         makeEmbed(
+          ```js
+/* =========================================================
+   COMANDO /FILA
+========================================================= */
 
-          interaction.guild,
+async function commandFila(interaction) {
+  const format = interaction.options.getString('formato');
+  const modality = interaction.options.getString('modalidade');
+  const channel = interaction.options.getChannel('canal');
 
-          '✅ Confirmação registrada',
+  if (!channel || !channel.isTextBased()) {
+    return ephemeral(interaction, '❌ O canal selecionado precisa ser um canal de texto.');
+  }
 
-          `<@${userId}> confirmou a aposta.\n\n` +
-          `Confirmações: **${match.confirmed.length}/${match.players.length}**`
+  await interaction.deferReply({ ephemeral: true });
+
+  // Valores do maior para o menor.
+  // Como as mensagens novas ficam embaixo no Discord,
+  // isso faz R$100,00 ficar no topo e R$0,30 no final.
+  const values = [...VALUES].sort((a, b) => b - a);
+
+  let total = 0;
+
+  for (const value of values) {
+    /*
+      1x1:
+      Uma única fila por valor.
+      Os jogadores escolhem Gelo Normal ou Gelo Infinito
+      através dos botões.
+    */
+    if (format === '1x1') {
+      const q = getQueue(interaction.guild.id, format, modality, value, '');
+
+      const message = await channel.send({
+        embeds: [
+          queueEmbed(q)
+        ],
+        components: [
+          new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId(
+                `queue_join_gelo|${format}|${modality}|${value}|Gelo Normal`
+              )
+              .setLabel('Gelo Normal')
+              .setStyle(ButtonStyle.Primary),
+
+            new ButtonBuilder()
+              .setCustomId(
+                `queue_join_gelo|${format}|${modality}|${value}|Gelo Infinito`
+              )
+              .setLabel('Gelo Infinito')
+              .setStyle(ButtonStyle.Success),
+
+            new ButtonBuilder()
+              .setCustomId(
+                `queue_leave|${format}|${modality}|${value}|`
+              )
+              .setLabel('Sair da fila')
+              .setStyle(ButtonStyle.Danger)
+          )
+        ]
+      });
+
+      q.messageId = message.id;
+      q.channelId = channel.id;
+
+      total++;
+      continue;
+    }
+
+    /*
+      2x2 / 3x3 / 4x4:
+      Uma fila por valor.
+    */
+    const q = getQueue(
+      interaction.guild.id,
+      format,
+      modality,
+      value,
+      ''
+    );
+
+    const message = await channel.send({
+      embeds: [
+        queueEmbed(q)
+      ],
+      components: [
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(
+              `queue_join|${format}|${modality}|${value}`
+            )
+            .setLabel('Entrar na fila')
+            .setStyle(ButtonStyle.Success),
+
+          new ButtonBuilder()
+            .setCustomId(
+              `queue_leave|${format}|${modality}|${value}|`
+            )
+            .setLabel('Sair da fila')
+            .setStyle(ButtonStyle.Danger)
         )
       ]
     });
 
-    return;
+    q.messageId = message.id;
+    q.channelId = channel.id;
+
+    total++;
   }
 
-  match.status =
-    'confirmed';
-
-  await sendPix(
-    interaction.channel,
-    match
-  );
-
-  await interaction.channel.setName(
-    getMatchChannelName(
-      match.value
-    )
-  ).catch(
-    () => {}
-  );
-
-  startRoomTimer(
-    interaction.channel,
-    match
-  );
-}
-
-async function cancelBet(
-  interaction,
-  match
-) {
-
-  if (
-    !match.players.includes(
-      interaction.user.id
-    )
-  ) {
-
-    return ephemeral(
-      interaction,
-      '❌ Você não participa desta aposta.'
-    );
-  }
-
-  await interaction.reply({
-
-    embeds: [
-      makeEmbed(
-
-        interaction.guild,
-
-        '❌ Aposta cancelada',
-
-        'O canal será excluído em **5 segundos**.'
-      )
-    ]
+  await interaction.editReply({
+    content:
+      `✅ Painel de filas criado com sucesso!\n\n` +
+      `🎮 Formato: **${format}**\n` +
+      `📱 Modalidade: **${modality}**\n` +
+      `📊 Filas criadas: **${total}**\n` +
+      `📌 Canal: <#${channel.id}>`
   });
-
-  match.status =
-    'cancelled';
-
-  setTimeout(
-    async () => {
-
-      matches.delete(
-        match.id
-      );
-
-      await interaction.channel
-        .delete()
-        .catch(
-          () => {}
-        );
-
-    },
-    5000
-  );
 }
+```
+
 
 async function sendPix(
   channel,
