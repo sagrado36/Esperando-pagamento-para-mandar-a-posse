@@ -2,6 +2,7 @@
 require("dotenv").config();
 
 const {
+  Events,
   Client,
   GatewayIntentBits,
   Partials,
