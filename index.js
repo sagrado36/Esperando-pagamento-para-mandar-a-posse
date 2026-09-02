@@ -28,8 +28,11 @@ const {
 
 const TOKEN = process.env.TOKEN;
 
+console.log("🔎 Verificando TOKEN...");
+console.log("TOKEN encontrado:", TOKEN ? "✅ SIM" : "❌ NÃO");
+
 if (!TOKEN) {
-  console.error("❌ TOKEN não encontrado no arquivo .env");
+  console.error("❌ A variável TOKEN não foi encontrada no Railway.");
   process.exit(1);
 }
 
