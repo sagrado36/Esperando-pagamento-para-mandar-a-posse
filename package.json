@@ -1,13 +1,16 @@
 {
-  "name": "discord-bot",
+  "name": "discord-free-fire-bot",
   "version": "1.0.0",
-  "description": "Bot Discord",
+  "description": "Bot de filas e apostas Free Fire para Discord",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
+  "engines": {
+    "node": ">=18.17.0"
+  },
   "dependencies": {
-    "discord.js": "^14.21.0",
+    "discord.js": "^14.25.1",
     "dotenv": "^16.6.1"
   }
 }
