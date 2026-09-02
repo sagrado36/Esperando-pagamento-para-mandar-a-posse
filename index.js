@@ -22,6 +22,7 @@ const {
   ChannelSelectMenuBuilder,
   ChannelType,
   ModalBuilder,
+  Events,
   TextInputBuilder,
   TextInputStyle,
   PermissionsBitField,
