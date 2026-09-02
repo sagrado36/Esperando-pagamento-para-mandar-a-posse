@@ -1,3 +1,4 @@
+```js
 require("dotenv").config();
 
 const fs = require("fs");
@@ -80,6 +81,57 @@ function loadDatabase() {
     db.bets ??= {};
     db.analyses ??= {};
     db.stats ??= {};
+
+    // Migração de configurações antigas
+    for (const guildId of Object.keys(db.guilds)) {
+      const config = db.guilds[guildId];
+
+      config.mobileChannelId ??= null;
+      config.emulatorChannelId ??= null;
+      config.betsCategoryId ??= null;
+      config.mediatorRoleId ??= null;
+      config.analystRoleId ??= null;
+      config.mobileAnalysisChannelId ??= null;
+      config.emulatorAnalysisChannelId ??= null;
+      config.fee ??= 0;
+
+      config.appearance ??= {};
+      config.appearance.color ??= null;
+
+      config.mediators ??= [];
+
+      // Fila real de mediadores
+      config.mediatorQueue ??= [];
+      config.mediatorRotation ??= 0;
+
+      // Mensagens publicadas pelo /med
+      config.mediatorQueueMessages ??= [];
+    }
+
+    // Migração das apostas antigas
+    for (const bet of Object.values(db.bets)) {
+      bet.payments ??= {};
+
+      for (const userId of bet.players || []) {
+        bet.payments[userId] ??= false;
+      }
+
+      bet.mediatorId ??= null;
+      bet.analystId ??= null;
+      bet.roomId ??= null;
+      bet.roomPassword ??= null;
+      bet.winnerId ??= null;
+      bet.resultRecorded ??= false;
+      bet.finalizedAt ??= null;
+    }
+
+    // Migração das análises
+    for (const analysis of Object.values(db.analyses)) {
+      analysis.analystId ??= null;
+      analysis.status ??= "aguardando";
+    }
+
+    saveDatabase();
   } catch (error) {
     console.error("❌ Erro ao carregar banco de dados:", error);
 
@@ -157,6 +209,9 @@ const MODALITIES = [
 
 const MAX_MEDIATORS = 20;
 
+// Lock simples para evitar duas entradas simultâneas
+const queueLocks = new Set();
+
 // ============================================================
 // FUNÇÕES BÁSICAS
 // ============================================================
@@ -197,10 +252,16 @@ function getGuildConfig(guildId) {
       mobileAnalysisChannelId: null,
       emulatorAnalysisChannelId: null,
       fee: 0,
+
       appearance: {
         color: null
       },
-      mediators: []
+
+      mediators: [],
+
+      mediatorQueue: [],
+      mediatorRotation: 0,
+      mediatorQueueMessages: []
     };
 
     saveDatabase();
@@ -210,7 +271,13 @@ function getGuildConfig(guildId) {
 
   config.mediators ??= [];
   config.appearance ??= {};
+  config.appearance.color ??= null;
+
   config.fee ??= 0;
+
+  config.mediatorQueue ??= [];
+  config.mediatorRotation ??= 0;
+  config.mediatorQueueMessages ??= [];
 
   return config;
 }
@@ -267,6 +334,29 @@ function isAnalyst(member, guildId) {
   );
 }
 
+function getEmbedColor(guildId) {
+  const config = getGuildConfig(guildId);
+
+  if (
+    config.appearance?.color &&
+    /^#[0-9A-F]{6}$/i.test(config.appearance.color)
+  ) {
+    return config.appearance.color;
+  }
+
+  return null;
+}
+
+function applyGuildColor(embed, guildId) {
+  const color = getEmbedColor(guildId);
+
+  if (color) {
+    embed.setColor(color);
+  }
+
+  return embed;
+}
+
 function getMemberMention(userId) {
   return `<@${userId}>`;
 }
@@ -292,6 +382,7 @@ function createQueueData({
     modality,
     value,
     players: [],
+    gelo: null,
     messageId: null,
     createdAt: Date.now()
   };
@@ -318,6 +409,10 @@ function queueCapacity() {
   return 2;
 }
 
+// ============================================================
+// EMBED DA FILA
+// ============================================================
+
 function queueEmbed(queue) {
   const players =
     queue.players.length > 0
@@ -326,7 +421,7 @@ function queueEmbed(queue) {
           .join("\n")
       : "👤 Nenhum jogador";
 
-  return new EmbedBuilder()
+  const embed = new EmbedBuilder()
     .setTitle("🎮 FILA")
     .setDescription(
       [
@@ -339,7 +434,13 @@ function queueEmbed(queue) {
         players
       ].join("\n")
     );
+
+  return applyGuildColor(embed, queue.guildId);
 }
+
+// ============================================================
+// BOTÕES DA FILA
+// ============================================================
 
 function queueButtons(queue) {
   const rows = [];
@@ -411,14 +512,23 @@ function createBet({
     modality,
     value,
     players: [...players],
+
     channelId: null,
+
     mediatorId: null,
     analystId: null,
+
     roomId: null,
     roomPassword: null,
+
     winnerId: null,
+
     status: "aguardando_pagamento",
+
     payments: {},
+
+    resultRecorded: false,
+
     createdAt: Date.now(),
     finalizedAt: null
   };
@@ -457,11 +567,245 @@ function updateBet(betId, data) {
 }
 
 // ============================================================
+// FILA DE MEDIADORES
+// ============================================================
+
+function getActiveMediatorQueue(guildId) {
+  const config = getGuildConfig(guildId);
+
+  // Remove mediadores que foram excluídos da configuração
+  config.mediatorQueue =
+    config.mediatorQueue.filter(
+      id =>
+        config.mediators.some(
+          mediator => mediator.id === id
+        )
+    );
+
+  return config.mediatorQueue;
+}
+
+function mediatorQueueEmbed(guildId) {
+  const config = getGuildConfig(guildId);
+
+  const activeQueue = getActiveMediatorQueue(guildId);
+
+  let description;
+
+  if (activeQueue.length === 0) {
+    description = "👥 Nenhum mediador na fila.";
+  } else {
+    const lines = activeQueue.map((id, index) => {
+      const mediator =
+        config.mediators.find(
+          item => item.id === id
+        );
+
+      return `${index + 1}. 👤 **${mediator?.name || "Mediador"}** — <@${id}>`;
+    });
+
+    description = lines.join("\n");
+  }
+
+  const embed = new EmbedBuilder()
+    .setTitle("👮 FILA DE MEDIADORES")
+    .setDescription(description)
+    .setFooter({
+      text: `${activeQueue.length} mediador(es) disponível(is)`
+    });
+
+  return applyGuildColor(embed, guildId);
+}
+
+function mediatorQueueButtons() {
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId("medq_join")
+        .setLabel("Entrar na Fila")
+        .setEmoji("✅")
+        .setStyle(ButtonStyle.Success),
+
+      new ButtonBuilder()
+        .setCustomId("medq_leave")
+        .setLabel("Sair da Fila")
+        .setEmoji("🚪")
+        .setStyle(ButtonStyle.Secondary)
+    )
+  ];
+}
+
+async function updateMediatorQueueMessages(guildId) {
+  const config = getGuildConfig(guildId);
+
+  if (!config.mediatorQueueMessages?.length) {
+    return;
+  }
+
+  const guild =
+    client.guilds.cache.get(guildId);
+
+  if (!guild) return;
+
+  const validMessages = [];
+
+  for (const item of config.mediatorQueueMessages) {
+    try {
+      const channel =
+        await guild.channels.fetch(item.channelId);
+
+      if (!channel || !channel.isTextBased()) {
+        continue;
+      }
+
+      const message =
+        await channel.messages.fetch(item.messageId);
+
+      await message.edit({
+        embeds: [
+          mediatorQueueEmbed(guildId)
+        ],
+        components: mediatorQueueButtons()
+      });
+
+      validMessages.push(item);
+    } catch {
+      // Mensagem apagada/canal inexistente
+    }
+  }
+
+  config.mediatorQueueMessages = validMessages;
+
+  saveDatabase();
+}
+
+async function joinMediatorQueue(interaction) {
+  const guildId = interaction.guild.id;
+  const config = getGuildConfig(guildId);
+
+  if (!isMediator(interaction.member, guildId)) {
+    await interaction.reply({
+      content: "❌ Apenas mediadores cadastrados podem entrar na fila.",
+      ephemeral: true
+    });
+    return;
+  }
+
+  const exists =
+    config.mediatorQueue.includes(
+      interaction.user.id
+    );
+
+  if (exists) {
+    await interaction.reply({
+      content: "❌ Você já está na fila de mediadores.",
+      ephemeral: true
+    });
+    return;
+  }
+
+  // Responde imediatamente para não expirar a interação.
+  await interaction.deferUpdate();
+
+  config.mediatorQueue.push(
+    interaction.user.id
+  );
+
+  saveDatabase();
+
+  await interaction.message.edit({
+    embeds: [
+      mediatorQueueEmbed(guildId)
+    ],
+    components: mediatorQueueButtons()
+  }).catch(() => {});
+
+  await updateMediatorQueueMessages(guildId);
+}
+
+async function leaveMediatorQueue(interaction) {
+  const guildId = interaction.guild.id;
+  const config = getGuildConfig(guildId);
+
+  if (!isMediator(interaction.member, guildId)) {
+    await interaction.reply({
+      content: "❌ Apenas mediadores cadastrados podem usar esta fila.",
+      ephemeral: true
+    });
+    return;
+  }
+
+  const index =
+    config.mediatorQueue.indexOf(
+      interaction.user.id
+    );
+
+  if (index === -1) {
+    await interaction.reply({
+      content: "❌ Você não está na fila de mediadores.",
+      ephemeral: true
+    });
+    return;
+  }
+
+  await interaction.deferUpdate();
+
+  config.mediatorQueue.splice(index, 1);
+
+  if (
+    config.mediatorRotation >=
+    config.mediatorQueue.length
+  ) {
+    config.mediatorRotation = 0;
+  }
+
+  saveDatabase();
+
+  await interaction.message.edit({
+    embeds: [
+      mediatorQueueEmbed(guildId)
+    ],
+    components: mediatorQueueButtons()
+  }).catch(() => {});
+
+  await updateMediatorQueueMessages(guildId);
+}
+
+function assignMediator(guildId) {
+  const config = getGuildConfig(guildId);
+
+  const queue =
+    getActiveMediatorQueue(guildId);
+
+  if (queue.length === 0) {
+    return null;
+  }
+
+  if (
+    config.mediatorRotation >= queue.length
+  ) {
+    config.mediatorRotation = 0;
+  }
+
+  const mediatorId =
+    queue[config.mediatorRotation];
+
+  config.mediatorRotation =
+    (config.mediatorRotation + 1) %
+    queue.length;
+
+  saveDatabase();
+
+  return mediatorId;
+}
+
+// ============================================================
 // PERMISSÕES DO CANAL DA APOSTA
 // ============================================================
 
 async function createBetChannel(guild, bet) {
-  const config = getGuildConfig(guild.id);
+  const config =
+    getGuildConfig(guild.id);
 
   const overwrites = [
     {
@@ -483,7 +827,16 @@ async function createBetChannel(guild, bet) {
     });
   }
 
-  if (config.mediatorRoleId) {
+  if (bet.mediatorId) {
+    overwrites.push({
+      id: bet.mediatorId,
+      allow: [
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.ReadMessageHistory
+      ]
+    });
+  } else if (config.mediatorRoleId) {
     overwrites.push({
       id: config.mediatorRoleId,
       allow: [
@@ -497,12 +850,13 @@ async function createBetChannel(guild, bet) {
   const channelName =
     `aposta-${bet.players[0].slice(-4)}-${bet.players[1].slice(-4)}`;
 
-  const channel = await guild.channels.create({
-    name: channelName,
-    type: ChannelType.GuildText,
-    parent: config.betsCategoryId || undefined,
-    permissionOverwrites: overwrites
-  });
+  const channel =
+    await guild.channels.create({
+      name: channelName,
+      type: ChannelType.GuildText,
+      parent: config.betsCategoryId || undefined,
+      permissionOverwrites: overwrites
+    });
 
   bet.channelId = channel.id;
 
@@ -524,7 +878,7 @@ function betEmbed(bet) {
     wo: "⚠️ Vitória por W.O."
   };
 
-  return new EmbedBuilder()
+  const embed = new EmbedBuilder()
     .setTitle("🎮 APOSTA")
     .setDescription(
       [
@@ -539,18 +893,26 @@ function betEmbed(bet) {
         `Status: ${statusMap[bet.status] || "⏳ Aguardando"}`
       ].join("\n")
     );
+
+  return applyGuildColor(
+    embed,
+    bet.guildId
+  );
 }
 
 function betPaymentButtons(bet) {
   const rows = [];
 
   for (const userId of bet.players) {
-    const paid = Boolean(bet.payments[userId]);
+    const paid =
+      Boolean(bet.payments[userId]);
 
     rows.push(
       new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-          .setCustomId(`pay|${bet.id}|${userId}`)
+          .setCustomId(
+            `pay|${bet.id}|${userId}`
+          )
           .setLabel(
             paid
               ? `${userId === bet.players[0] ? "Jogador 1" : "Jogador 2"}: Pago`
@@ -567,12 +929,25 @@ function betPaymentButtons(bet) {
   }
 
   return rows;
-}// ============================================================
+}
+
+// ============================================================
 // PAINEL DO MEDIADOR
 // ============================================================
 
 function mediatorPanelEmbed(bet) {
-  return new EmbedBuilder()
+  const status =
+    bet.status === "aguardando_pagamento"
+      ? "⏳ Aguardando"
+      : bet.status === "aguardando_sala"
+        ? "⏳ Aguardando sala"
+        : bet.status === "em_andamento"
+          ? "🎮 Em andamento"
+          : bet.status === "wo"
+            ? "⚠️ Vitória por W.O."
+            : "✅ Finalizada";
+
+  const embed = new EmbedBuilder()
     .setTitle("🎮 PAINEL DO MEDIADOR")
     .setDescription(
       [
@@ -584,19 +959,14 @@ function mediatorPanelEmbed(bet) {
         `📱 Modalidade: ${bet.modality}`,
         `💰 Valor: ${moneyBRL(bet.value)}`,
         "",
-        `Status: ${
-          bet.status === "aguardando_pagamento"
-            ? "⏳ Aguardando"
-            : bet.status === "aguardando_sala"
-              ? "⏳ Aguardando sala"
-              : bet.status === "em_andamento"
-                ? "🎮 Em andamento"
-                : bet.status === "wo"
-                  ? "⚠️ Vitória por W.O."
-                  : "✅ Finalizada"
-        }`
+        `Status: ${status}`
       ].join("\n")
     );
+
+  return applyGuildColor(
+    embed,
+    bet.guildId
+  );
 }
 
 function mediatorPanelButtons(bet) {
@@ -640,21 +1010,23 @@ function roomModal(betId) {
     .setCustomId(`room_modal|${betId}`)
     .setTitle("🏠 Abrir Sala");
 
-  const roomId = new TextInputBuilder()
-    .setCustomId("room_id")
-    .setLabel("ID da sala")
-    .setPlaceholder("Digite o ID da sala")
-    .setStyle(TextInputStyle.Short)
-    .setRequired(true)
-    .setMaxLength(50);
+  const roomId =
+    new TextInputBuilder()
+      .setCustomId("room_id")
+      .setLabel("ID da sala")
+      .setPlaceholder("Digite o ID da sala")
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true)
+      .setMaxLength(50);
 
-  const password = new TextInputBuilder()
-    .setCustomId("room_password")
-    .setLabel("Senha da sala")
-    .setPlaceholder("Digite a senha da sala")
-    .setStyle(TextInputStyle.Short)
-    .setRequired(true)
-    .setMaxLength(50);
+  const password =
+    new TextInputBuilder()
+      .setCustomId("room_password")
+      .setLabel("Senha da sala")
+      .setPlaceholder("Digite a senha da sala")
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true)
+      .setMaxLength(50);
 
   modal.addComponents(
     new ActionRowBuilder().addComponents(roomId),
@@ -669,13 +1041,14 @@ function winnerModal(betId) {
     .setCustomId(`winner_modal|${betId}`)
     .setTitle("🏆 Escolher Vencedor");
 
-  const winner = new TextInputBuilder()
-    .setCustomId("winner_id")
-    .setLabel("ID do jogador vencedor")
-    .setPlaceholder("Digite o ID do jogador")
-    .setStyle(TextInputStyle.Short)
-    .setRequired(true)
-    .setMaxLength(30);
+  const winner =
+    new TextInputBuilder()
+      .setCustomId("winner_id")
+      .setLabel("ID do jogador vencedor")
+      .setPlaceholder("Digite o ID do jogador")
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true)
+      .setMaxLength(30);
 
   modal.addComponents(
     new ActionRowBuilder().addComponents(winner)
@@ -689,13 +1062,14 @@ function mediatorAddIdModal() {
     .setCustomId("cfg_med_id")
     .setTitle("➕ Adicionar Mediador");
 
-  const id = new TextInputBuilder()
-    .setCustomId("mediator_id")
-    .setLabel("Discord ID")
-    .setPlaceholder("Digite o ID do Discord")
-    .setStyle(TextInputStyle.Short)
-    .setRequired(true)
-    .setMaxLength(30);
+  const id =
+    new TextInputBuilder()
+      .setCustomId("mediator_id")
+      .setLabel("Discord ID")
+      .setPlaceholder("Digite o ID do Discord")
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true)
+      .setMaxLength(30);
 
   modal.addComponents(
     new ActionRowBuilder().addComponents(id)
@@ -709,29 +1083,32 @@ function mediatorDataModal(userId) {
     .setCustomId(`cfg_med_data|${userId}`)
     .setTitle("Dados do Mediador");
 
-  const name = new TextInputBuilder()
-    .setCustomId("mediator_name")
-    .setLabel("Nome do mediador")
-    .setPlaceholder("Nome")
-    .setStyle(TextInputStyle.Short)
-    .setRequired(true)
-    .setMaxLength(100);
+  const name =
+    new TextInputBuilder()
+      .setCustomId("mediator_name")
+      .setLabel("Nome do mediador")
+      .setPlaceholder("Nome")
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true)
+      .setMaxLength(100);
 
-  const pix = new TextInputBuilder()
-    .setCustomId("mediator_pix")
-    .setLabel("Chave Pix")
-    .setPlaceholder("Chave Pix")
-    .setStyle(TextInputStyle.Short)
-    .setRequired(true)
-    .setMaxLength(200);
+  const pix =
+    new TextInputBuilder()
+      .setCustomId("mediator_pix")
+      .setLabel("Chave Pix")
+      .setPlaceholder("Chave Pix")
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true)
+      .setMaxLength(200);
 
-  const qr = new TextInputBuilder()
-    .setCustomId("mediator_qr")
-    .setLabel("QR Code")
-    .setPlaceholder("URL ou referência do QR Code")
-    .setStyle(TextInputStyle.Paragraph)
-    .setRequired(false)
-    .setMaxLength(1000);
+  const qr =
+    new TextInputBuilder()
+      .setCustomId("mediator_qr")
+      .setLabel("QR Code")
+      .setPlaceholder("URL ou referência do QR Code")
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(false)
+      .setMaxLength(1000);
 
   modal.addComponents(
     new ActionRowBuilder().addComponents(name),
@@ -747,16 +1124,59 @@ function feeModal() {
     .setCustomId("cfg_fee")
     .setTitle("💰 Taxa");
 
-  const fee = new TextInputBuilder()
-    .setCustomId("fee")
-    .setLabel("Taxa")
-    .setPlaceholder("Ex: 10 ou 5,00")
-    .setStyle(TextInputStyle.Short)
-    .setRequired(true)
-    .setMaxLength(20);
+  const fee =
+    new TextInputBuilder()
+      .setCustomId("fee")
+      .setLabel("Taxa")
+      .setPlaceholder("Ex: 10 ou 5,00")
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true)
+      .setMaxLength(20);
 
   modal.addComponents(
     new ActionRowBuilder().addComponents(fee)
+  );
+
+  return modal;
+}
+
+function colorModal() {
+  const modal = new ModalBuilder()
+    .setCustomId("cfg_color")
+    .setTitle("🎨 Cor dos Embeds");
+
+  const color =
+    new TextInputBuilder()
+      .setCustomId("color")
+      .setLabel("Cor HEX")
+      .setPlaceholder("#5865F2")
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true)
+      .setMaxLength(7);
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(color)
+  );
+
+  return modal;
+}
+
+function avatarModal() {
+  const modal = new ModalBuilder()
+    .setCustomId("cfg_avatar")
+    .setTitle("🤖 Foto do Bot");
+
+  const avatar =
+    new TextInputBuilder()
+      .setCustomId("avatar_url")
+      .setLabel("URL da imagem")
+      .setPlaceholder("https://...")
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true)
+      .setMaxLength(1000);
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(avatar)
   );
 
   return modal;
@@ -767,7 +1187,8 @@ function feeModal() {
 // ============================================================
 
 function configEmbed(guildId) {
-  const config = getGuildConfig(guildId);
+  const config =
+    getGuildConfig(guildId);
 
   const mobile =
     config.mobileChannelId
@@ -804,7 +1225,7 @@ function configEmbed(guildId) {
       ? `<#${config.emulatorAnalysisChannelId}>`
       : "❌ Não configurado";
 
-  return new EmbedBuilder()
+  const embed = new EmbedBuilder()
     .setTitle("⚙️ CONFIGURAÇÃO")
     .setDescription(
       [
@@ -817,9 +1238,15 @@ function configEmbed(guildId) {
         `🔎 Análise Emulador: ${emulatorAnalysis}`,
         `💰 Taxa: ${config.fee}%`,
         "",
-        `👥 Mediadores: ${config.mediators.length}/${MAX_MEDIATORS}`
+        `👥 Mediadores: ${config.mediators.length}/${MAX_MEDIATORS}`,
+        `🟢 Na fila: ${config.mediatorQueue.length}`
       ].join("\n")
     );
+
+  return applyGuildColor(
+    embed,
+    guildId
+  );
 }
 
 function configButtons() {
@@ -883,7 +1310,13 @@ function configButtons() {
         .setCustomId("cfg_mediators")
         .setLabel("Mediadores")
         .setEmoji("👥")
-        .setStyle(ButtonStyle.Success)
+        .setStyle(ButtonStyle.Success),
+
+      new ButtonBuilder()
+        .setCustomId("cfg_appearance")
+        .setLabel("Aparência")
+        .setEmoji("🎨")
+        .setStyle(ButtonStyle.Secondary)
     )
   ];
 }
@@ -907,6 +1340,24 @@ function mediatorConfigButtons() {
         .setCustomId("cfg_list_mediators")
         .setLabel("Listar Mediadores")
         .setEmoji("📋")
+        .setStyle(ButtonStyle.Secondary)
+    )
+  ];
+}
+
+function appearanceButtons() {
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId("cfg_color_button")
+        .setLabel("Cor dos Embeds")
+        .setEmoji("🎨")
+        .setStyle(ButtonStyle.Primary),
+
+      new ButtonBuilder()
+        .setCustomId("cfg_avatar_button")
+        .setLabel("Foto do Bot")
+        .setEmoji("🤖")
         .setStyle(ButtonStyle.Secondary)
     )
   ];
@@ -937,7 +1388,7 @@ function roleSelect(customId, placeholder) {
 }
 
 // ============================================================
-// FILA — FLUXO /fila
+// FILA — FLUXO /FILA
 // ============================================================
 
 function filaFormatSelect() {
@@ -995,29 +1446,36 @@ function analysisEmbed(type, bet) {
       ? "Mobile"
       : "Emulador";
 
-  return new EmbedBuilder()
+  const embed = new EmbedBuilder()
     .setTitle("🔎 ANÁLISE SOLICITADA")
     .setDescription(
       [
         `Uma análise ${name} foi solicitada.`,
         "",
-        "Status: ⏳ Aguardando analista",
-        "",
-        "🔎 **Assumir Análise**"
+        "Status: ⏳ Aguardando analista"
       ].join("\n")
     )
     .setFooter({
       text: `Aposta: ${bet.id}`
     });
+
+  return applyGuildColor(
+    embed,
+    bet.guildId
+  );
 }
 
-function analysisAssumedEmbed(type, bet, analystId) {
+function analysisAssumedEmbed(
+  type,
+  bet,
+  analystId
+) {
   const name =
     type === "mobile"
       ? "Mobile"
       : "Emulador";
 
-  return new EmbedBuilder()
+  const embed = new EmbedBuilder()
     .setTitle("🔎 ANÁLISE SOLICITADA")
     .setDescription(
       [
@@ -1030,12 +1488,19 @@ function analysisAssumedEmbed(type, bet, analystId) {
     .setFooter({
       text: `Aposta: ${bet.id}`
     });
+
+  return applyGuildColor(
+    embed,
+    bet.guildId
+  );
 }
 
 function analysisButton(analysisId) {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId(`analysis_claim|${analysisId}`)
+      .setCustomId(
+        `analysis_claim|${analysisId}`
+      )
       .setLabel("Assumir Análise")
       .setEmoji("🔎")
       .setStyle(ButtonStyle.Primary)
@@ -1053,8 +1518,11 @@ function registerBetResult(
   value,
   wo = false
 ) {
-  const winnerStats = getStats(guildId, winnerId);
-  const loserStats = getStats(guildId, loserId);
+  const winnerStats =
+    getStats(guildId, winnerId);
+
+  const loserStats =
+    getStats(guildId, loserId);
 
   winnerStats.bets++;
   loserStats.bets++;
@@ -1077,26 +1545,36 @@ function registerBetResult(
 // FINALIZAÇÃO
 // ============================================================
 
-async function finalizeBetChannel(channel, bet) {
+async function finalizeBetChannel(
+  channel,
+  bet
+) {
   if (!channel) return;
 
-  await channel.send({
-    embeds: [
-      new EmbedBuilder()
-        .setTitle("🔒 APOSTA FINALIZADA")
-        .setDescription(
-          [
-            "A aposta foi finalizada.",
-            "🗑️ Este canal será deletado em 5 segundos."
-          ].join("\n")
-        )
-    ]
-  });
+  if (bet.finalizedAt) {
+    return;
+  }
 
   bet.status = "finalizada";
   bet.finalizedAt = Date.now();
 
   saveDatabase();
+
+  await channel.send({
+    embeds: [
+      applyGuildColor(
+        new EmbedBuilder()
+          .setTitle("🔒 APOSTA FINALIZADA")
+          .setDescription(
+            [
+              "A aposta foi finalizada.",
+              "🗑️ Este canal será deletado em 5 segundos."
+            ].join("\n")
+          ),
+        bet.guildId
+      )
+    ]
+  }).catch(() => {});
 
   setTimeout(async () => {
     try {
@@ -1115,10 +1593,11 @@ async function finalizeBetChannel(channel, bet) {
 // ============================================================
 
 async function handlePlayerStats(message) {
-  const stats = getStats(
-    message.guild.id,
-    message.author.id
-  );
+  const stats =
+    getStats(
+      message.guild.id,
+      message.author.id
+    );
 
   const embed = new EmbedBuilder()
     .setTitle("📊 ESTATÍSTICAS DO JOGADOR")
@@ -1137,25 +1616,40 @@ async function handlePlayerStats(message) {
       ].join("\n")
     );
 
+  applyGuildColor(
+    embed,
+    message.guild.id
+  );
+
   await message.reply({
     embeds: [embed]
   });
-}// ============================================================
-// COMANDOS .SSMOB / .SSEMU
+}
+
+// ============================================================
+// .SSMOB / .SSEMU
 // ============================================================
 
-async function requestAnalysis(message, type) {
+async function requestAnalysis(
+  message,
+  type
+) {
   if (!message.guild) return;
 
-  if (!isMediator(message.member, message.guild.id)) {
-    await message.reply({
-      content: "❌ Você não tem permissão para usar este comando.",
-      ephemeral: true
-    }).catch(() => {});
+  if (!isMediator(
+    message.member,
+    message.guild.id
+  )) {
+    await message.reply(
+      "❌ Você não tem permissão para usar este comando."
+    ).catch(() => {});
     return;
   }
 
-  const bet = findBetByChannel(message.channel.id);
+  const bet =
+    findBetByChannel(
+      message.channel.id
+    );
 
   if (!bet) {
     await message.reply(
@@ -1164,7 +1658,18 @@ async function requestAnalysis(message, type) {
     return;
   }
 
-  const config = getGuildConfig(message.guild.id);
+  if (
+    bet.status === "finalizada" ||
+    bet.status === "wo"
+  ) {
+    await message.reply(
+      "❌ Esta aposta já foi finalizada."
+    );
+    return;
+  }
+
+  const config =
+    getGuildConfig(message.guild.id);
 
   const analysisChannelId =
     type === "mobile"
@@ -1179,16 +1684,38 @@ async function requestAnalysis(message, type) {
   }
 
   const analysisChannel =
-    await message.guild.channels.fetch(analysisChannelId).catch(() => null);
+    await message.guild.channels
+      .fetch(analysisChannelId)
+      .catch(() => null);
 
-  if (!analysisChannel || !analysisChannel.isTextBased()) {
+  if (
+    !analysisChannel ||
+    !analysisChannel.isTextBased()
+  ) {
     await message.reply(
       "❌ O canal de análise configurado não está disponível."
     );
     return;
   }
 
-  const analysisId = generateId(12);
+  // Impede várias análises iguais abertas para a mesma aposta.
+  const existing =
+    Object.values(db.analyses).find(
+      analysis =>
+        analysis.betId === bet.id &&
+        analysis.type === type &&
+        analysis.status === "aguardando"
+    );
+
+  if (existing) {
+    await message.reply(
+      `❌ Já existe uma análise ${type === "mobile" ? "Mobile" : "Emulador"} aguardando analista.`
+    );
+    return;
+  }
+
+  const analysisId =
+    generateId(12);
 
   const analysis = {
     id: analysisId,
@@ -1203,42 +1730,71 @@ async function requestAnalysis(message, type) {
     status: "aguardando"
   };
 
-  db.analyses[analysisId] = analysis;
-  saveDatabase();
-
-  const sent = await analysisChannel.send({
-    embeds: [
-      analysisEmbed(type, bet)
-    ],
-    components: [
-      analysisButton(analysisId)
-    ]
-  });
-
-  analysis.messageId = sent.id;
+  db.analyses[analysisId] =
+    analysis;
 
   saveDatabase();
 
-  await message.reply(
-    `🔎 Análise ${type === "mobile" ? "Mobile" : "Emulador"} solicitada com sucesso.`
-  );
+  try {
+    const sent =
+      await analysisChannel.send({
+        embeds: [
+          analysisEmbed(
+            type,
+            bet
+          )
+        ],
+        components: [
+          analysisButton(
+            analysisId
+          )
+        ]
+      });
+
+    analysis.messageId =
+      sent.id;
+
+    saveDatabase();
+
+    await message.reply(
+      `🔎 Análise ${type === "mobile" ? "Mobile" : "Emulador"} solicitada.`
+    );
+  } catch (error) {
+    delete db.analyses[analysisId];
+    saveDatabase();
+
+    console.error(
+      "❌ Erro ao enviar análise:",
+      error
+    );
+
+    await message.reply(
+      "❌ Não foi possível enviar a solicitação de análise."
+    ).catch(() => {});
+  }
 }
 
 // ============================================================
-// COMANDO .MED
+// .MED
 // ============================================================
 
 async function handleDotMed(message) {
   if (!message.guild) return;
 
-  if (!isMediator(message.member, message.guild.id)) {
+  if (!isMediator(
+    message.member,
+    message.guild.id
+  )) {
     await message.reply(
       "❌ Você não tem permissão para usar este comando."
     );
     return;
   }
 
-  const bet = findBetByChannel(message.channel.id);
+  const bet =
+    findBetByChannel(
+      message.channel.id
+    );
 
   if (!bet) {
     await message.reply(
@@ -1247,14 +1803,18 @@ async function handleDotMed(message) {
     return;
   }
 
-  if (bet.mediatorId && bet.mediatorId !== message.author.id) {
+  if (
+    bet.mediatorId &&
+    bet.mediatorId !== message.author.id
+  ) {
     await message.reply(
       `❌ Esta aposta já possui o mediador <@${bet.mediatorId}>.`
     );
     return;
   }
 
-  bet.mediatorId = message.author.id;
+  bet.mediatorId =
+    message.author.id;
 
   saveDatabase();
 
@@ -1276,37 +1836,54 @@ async function handleDotMed(message) {
 }
 
 // ============================================================
-// /MED — FILA PÚBLICA DE MEDIADORES
+// /MED — PUBLICAR FILA
 // ============================================================
 
-function mediatorQueueEmbed(guildId) {
-  const config = getGuildConfig(guildId);
-
-  const lines = [];
-
-  if (config.mediators.length === 0) {
-    lines.push("👥 Nenhum mediador cadastrado.");
-  } else {
-    for (const mediator of config.mediators) {
-      lines.push(
-        `👤 **${mediator.name}** — <@${mediator.id}>`
-      );
-    }
+async function publishMediatorQueue(
+  interaction
+) {
+  if (!interaction.guild) {
+    await interaction.reply({
+      content:
+        "❌ Este comando só pode ser usado em servidor.",
+      ephemeral: true
+    });
+    return;
   }
 
-  return new EmbedBuilder()
-    .setTitle("👮 FILA DE MEDIADORES")
-    .setDescription(lines.join("\n"));
-}
+  const sent =
+    await interaction.reply({
+      embeds: [
+        mediatorQueueEmbed(
+          interaction.guild.id
+        )
+      ],
+      components:
+        mediatorQueueButtons(),
+      fetchReply: true
+    });
 
-async function publishMediatorQueue(interaction) {
-  if (!interaction.guild) return;
+  const config =
+    getGuildConfig(
+      interaction.guild.id
+    );
 
-  await interaction.reply({
-    embeds: [
-      mediatorQueueEmbed(interaction.guild.id)
-    ]
+  config.mediatorQueueMessages ??= [];
+
+  config.mediatorQueueMessages.push({
+    channelId: sent.channelId,
+    messageId: sent.id
   });
+
+  // Limita o banco para não acumular mensagens antigas.
+  if (
+    config.mediatorQueueMessages.length > 20
+  ) {
+    config.mediatorQueueMessages =
+      config.mediatorQueueMessages.slice(-20);
+  }
+
+  saveDatabase();
 }
 
 // ============================================================
@@ -1315,7 +1892,8 @@ async function publishMediatorQueue(interaction) {
 
 async function startFila(interaction) {
   await interaction.reply({
-    content: "🎯 Escolha o formato da fila:",
+    content:
+      "🎯 Escolha o formato da fila:",
     components: [
       filaFormatSelect()
     ],
@@ -1333,7 +1911,10 @@ async function publishQueues(
   format,
   modality
 ) {
-  if (!channel || !channel.isTextBased()) {
+  if (
+    !channel ||
+    !channel.isTextBased()
+  ) {
     throw new Error(
       "O canal escolhido não permite mensagens."
     );
@@ -1342,148 +1923,385 @@ async function publishQueues(
   const createdQueues = [];
 
   for (const value of VALUES) {
-    const queue = createQueueData({
-      guildId: interaction.guild.id,
-      channelId: channel.id,
-      format,
-      modality,
-      value
-    });
+    const queue =
+      createQueueData({
+        guildId:
+          interaction.guild.id,
+        channelId:
+          channel.id,
+        format,
+        modality,
+        value
+      });
 
-    const message = await channel.send({
-      embeds: [
-        queueEmbed(queue)
-      ],
-      components: queueButtons(queue)
-    });
+    const message =
+      await channel.send({
+        embeds: [
+          queueEmbed(queue)
+        ],
+        components:
+          queueButtons(queue)
+      });
 
-    queue.messageId = message.id;
+    queue.messageId =
+      message.id;
 
     createdQueues.push(queue);
+
+    saveDatabase();
   }
 
-  saveDatabase();
-
   return createdQueues;
+}
+
+// ============================================================
+// ATUALIZAR MENSAGEM DA FILA
+// ============================================================
+
+async function updateQueueMessage(
+  queue
+) {
+  if (!queue?.channelId || !queue?.messageId) {
+    return;
+  }
+
+  const guild =
+    client.guilds.cache.get(
+      queue.guildId
+    );
+
+  if (!guild) return;
+
+  const channel =
+    await guild.channels
+      .fetch(queue.channelId)
+      .catch(() => null);
+
+  if (
+    !channel ||
+    !channel.isTextBased()
+  ) {
+    return;
+  }
+
+  const message =
+    await channel.messages
+      .fetch(queue.messageId)
+      .catch(() => null);
+
+  if (!message) return;
+
+  await message.edit({
+    embeds: [
+      queueEmbed(queue)
+    ],
+    components:
+      queueButtons(queue)
+  }).catch(() => {});
 }
 
 // ============================================================
 // CRIAR APOSTA QUANDO A FILA CHEGAR A 2
 // ============================================================
 
-async function startBetFromQueue(queue) {
+async function startBetFromQueue(
+  queue
+) {
   if (!queue) return null;
 
-  if (queue.players.length !== queueCapacity()) {
+  if (
+    queue.players.length !==
+    queueCapacity()
+  ) {
     return null;
   }
 
   const guild =
-    client.guilds.cache.get(queue.guildId);
+    client.guilds.cache.get(
+      queue.guildId
+    );
 
   if (!guild) return null;
 
-  const categoryId =
-    getGuildConfig(queue.guildId).betsCategoryId;
+  const config =
+    getGuildConfig(
+      queue.guildId
+    );
 
-  const bet = createBet({
-    guildId: queue.guildId,
-    categoryId,
-    format: queue.format,
-    modality: queue.modality,
-    value: queue.value,
-    players: queue.players
-  });
+  const mediatorId =
+    assignMediator(
+      queue.guildId
+    );
 
-  const channel =
-    await createBetChannel(guild, bet);
+  if (!mediatorId) {
+    return null;
+  }
 
-  await channel.send({
-    content: queue.players
-      .map(id => `<@${id}>`)
-      .join(" "),
-    embeds: [
-      betEmbed(bet)
-    ],
-    components: betPaymentButtons(bet)
-  });
+  const bet =
+    createBet({
+      guildId:
+        queue.guildId,
+      categoryId:
+        config.betsCategoryId,
+      format:
+        queue.format,
+      modality:
+        queue.modality,
+      value:
+        queue.value,
+      players:
+        queue.players
+    });
 
-  deleteQueue(queue.id);
+  bet.mediatorId =
+    mediatorId;
 
-  return bet;
+  saveDatabase();
+
+  try {
+    const channel =
+      await createBetChannel(
+        guild,
+        bet
+      );
+
+    // Dá acesso direto ao mediador escolhido.
+    await channel.permissionOverwrites
+      .edit(
+        mediatorId,
+        {
+          ViewChannel: true,
+          SendMessages: true,
+          ReadMessageHistory: true
+        }
+      )
+      .catch(() => {});
+
+    await channel.send({
+      content: [
+        ...queue.players.map(
+          id => `<@${id}>`
+        ),
+        `<@${mediatorId}>`
+      ].join(" "),
+
+      embeds: [
+        betEmbed(bet)
+      ],
+
+      components:
+        betPaymentButtons(bet)
+    });
+
+    deleteQueue(
+      queue.id
+    );
+
+    return bet;
+  } catch (error) {
+    console.error(
+      "❌ Erro ao criar aposta:",
+      error
+    );
+
+    // Se falhou, não deixa uma aposta quebrada salva.
+    delete db.bets[bet.id];
+    saveDatabase();
+
+    return null;
+  }
 }
 
 // ============================================================
 // ENTRAR NA FILA
 // ============================================================
 
-async function enterQueue(interaction, queue, gelo = null) {
+async function enterQueue(
+  interaction,
+  queue,
+  gelo = null
+) {
   if (!queue) {
     await interaction.reply({
-      content: "❌ Fila não encontrada.",
-      ephemeral: true
-    });
-    return;
-  }
-
-  if (queue.players.includes(interaction.user.id)) {
-    await interaction.reply({
-      content: "❌ Você já está nesta fila.",
-      ephemeral: true
-    });
-    return;
-  }
-
-  if (queue.players.length >= queueCapacity()) {
-    await interaction.reply({
-      content: "❌ Esta fila já está cheia.",
+      content:
+        "❌ Fila não encontrada.",
       ephemeral: true
     });
     return;
   }
 
   // ----------------------------------------------------------
-  // 1x1 — Gelo
+  // LOCK
   // ----------------------------------------------------------
 
-  if (queue.format === "1x1") {
-    if (!gelo) {
-      await interaction.reply({
-        content: "❌ Escolha o tipo de gelo.",
-        ephemeral: true
-      });
-      return;
-    }
-
-    if (queue.players.length === 1) {
-      queue.gelo = gelo;
-    } else if (queue.gelo !== gelo) {
-      await interaction.reply({
-        content: "❌ O segundo jogador precisa escolher o mesmo tipo de gelo.",
-        ephemeral: true
-      });
-      return;
-    }
+  if (queueLocks.has(queue.id)) {
+    await interaction.reply({
+      content:
+        "⏳ Esta fila está sendo processada. Tente novamente.",
+      ephemeral: true
+    });
+    return;
   }
 
-  queue.players.push(interaction.user.id);
+  queueLocks.add(queue.id);
 
-  saveDatabase();
+  try {
+    // --------------------------------------------------------
+    // MEDIADORES
+    // --------------------------------------------------------
 
-  await interaction.message.edit({
-    embeds: [
-      queueEmbed(queue)
-    ],
-    components: queueButtons(queue)
-  }).catch(() => {});
+    const mediatorQueue =
+      getActiveMediatorQueue(
+        interaction.guild.id
+      );
 
-  await interaction.reply({
-    content: "✅ Você entrou na fila.",
-    ephemeral: true
-  });
+    if (
+      mediatorQueue.length === 0
+    ) {
+      await interaction.reply({
+        content:
+          "❌ Não há mediadores na fila no momento.",
+        ephemeral: true
+      });
+      return;
+    }
 
-  if (queue.players.length >= queueCapacity()) {
-    await startBetFromQueue(queue);
+    // --------------------------------------------------------
+    // VALIDAÇÕES
+    // --------------------------------------------------------
+
+    if (
+      queue.players.includes(
+        interaction.user.id
+      )
+    ) {
+      await interaction.reply({
+        content:
+          "❌ Você já está nesta fila.",
+        ephemeral: true
+      });
+      return;
+    }
+
+    if (
+      queue.players.length >=
+      queueCapacity()
+    ) {
+      await interaction.reply({
+        content:
+          "❌ Esta fila já está cheia.",
+        ephemeral: true
+      });
+      return;
+    }
+
+    // --------------------------------------------------------
+    // 1X1 — GELO
+    // --------------------------------------------------------
+
+    if (
+      queue.format === "1x1"
+    ) {
+      if (!gelo) {
+        await interaction.reply({
+          content:
+            "❌ Escolha o tipo de gelo.",
+          ephemeral: true
+        });
+        return;
+      }
+
+      if (
+        gelo !== "normal" &&
+        gelo !== "infinito"
+      ) {
+        await interaction.reply({
+          content:
+            "❌ Tipo de gelo inválido.",
+          ephemeral: true
+        });
+        return;
+      }
+
+      if (
+        queue.players.length === 0
+      ) {
+        queue.gelo = gelo;
+      } else if (
+        queue.players.length === 1 &&
+        queue.gelo !== gelo
+      ) {
+        await interaction.reply({
+          content:
+            "❌ O segundo jogador precisa escolher o mesmo tipo de gelo.",
+          ephemeral: true
+        });
+        return;
+      }
+    }
+
+    // --------------------------------------------------------
+    // ACK IMEDIATO
+    // --------------------------------------------------------
+
+    await interaction.deferReply({
+      ephemeral: true
+    });
+
+    // --------------------------------------------------------
+    // ADICIONAR
+    // --------------------------------------------------------
+
+    queue.players.push(
+      interaction.user.id
+    );
+
+    saveDatabase();
+
+    // --------------------------------------------------------
+    // ATUALIZAR FILA
+    // --------------------------------------------------------
+
+    await updateQueueMessage(
+      queue
+    );
+
+    // --------------------------------------------------------
+    // FILA COMPLETA
+    // --------------------------------------------------------
+
+    if (
+      queue.players.length >=
+      queueCapacity()
+    ) {
+      const bet =
+        await startBetFromQueue(
+          queue
+        );
+
+      if (bet) {
+        await interaction.editReply({
+          content:
+            "✅ Você entrou na fila. A aposta foi criada."
+        });
+      } else {
+        await interaction.editReply({
+          content:
+            "⚠️ Você entrou na fila, mas houve um erro ao criar a aposta. Um administrador precisa verificar."
+        });
+      }
+
+      return;
+    }
+
+    await interaction.editReply({
+      content:
+        "✅ Você entrou na fila."
+    });
+  } finally {
+    queueLocks.delete(
+      queue.id
+    );
   }
 }
 
@@ -1491,95 +2309,162 @@ async function enterQueue(interaction, queue, gelo = null) {
 // SAIR DA FILA
 // ============================================================
 
-async function leaveQueue(interaction, queue) {
+async function leaveQueue(
+  interaction,
+  queue
+) {
   if (!queue) {
     await interaction.reply({
-      content: "❌ Fila não encontrada.",
+      content:
+        "❌ Fila não encontrada.",
       ephemeral: true
     });
     return;
   }
 
-  const index =
-    queue.players.indexOf(interaction.user.id);
-
-  if (index === -1) {
+  if (
+    queueLocks.has(queue.id)
+  ) {
     await interaction.reply({
-      content: "❌ Você não está nesta fila.",
+      content:
+        "⏳ Esta fila está sendo processada. Tente novamente.",
       ephemeral: true
     });
     return;
   }
 
-  queue.players.splice(index, 1);
+  queueLocks.add(queue.id);
 
-  if (queue.format === "1x1") {
-    if (queue.players.length === 0) {
-      delete queue.gelo;
+  try {
+    const index =
+      queue.players.indexOf(
+        interaction.user.id
+      );
+
+    if (index === -1) {
+      await interaction.reply({
+        content:
+          "❌ Você não está nesta fila.",
+        ephemeral: true
+      });
+      return;
     }
+
+    await interaction.deferReply({
+      ephemeral: true
+    });
+
+    queue.players.splice(
+      index,
+      1
+    );
+
+    if (
+      queue.format === "1x1" &&
+      queue.players.length === 0
+    ) {
+      queue.gelo = null;
+    }
+
+    saveDatabase();
+
+    await updateQueueMessage(
+      queue
+    );
+
+    await interaction.editReply({
+      content:
+        "🚪 Você saiu da fila."
+    });
+  } finally {
+    queueLocks.delete(
+      queue.id
+    );
   }
-
-  saveDatabase();
-
-  await interaction.message.edit({
-    embeds: [
-      queueEmbed(queue)
-    ],
-    components: queueButtons(queue)
-  }).catch(() => {});
-
-  await interaction.reply({
-    content: "🚪 Você saiu da fila.",
-    ephemeral: true
-  });
 }
 
 // ============================================================
 // PAGAMENTO
 // ============================================================
 
-async function confirmPayment(interaction, bet, targetUserId) {
+async function confirmPayment(
+  interaction,
+  bet,
+  targetUserId
+) {
   if (!bet) {
     await interaction.reply({
-      content: "❌ Aposta não encontrada.",
+      content:
+        "❌ Aposta não encontrada.",
       ephemeral: true
     });
     return;
   }
 
-  if (interaction.user.id !== targetUserId) {
+  if (
+    bet.status !==
+    "aguardando_pagamento"
+  ) {
     await interaction.reply({
-      content: "❌ Esse botão pertence ao outro jogador.",
+      content:
+        "❌ O pagamento desta aposta não está mais aberto.",
       ephemeral: true
     });
     return;
   }
 
-  if (!bet.players.includes(interaction.user.id)) {
+  if (
+    interaction.user.id !==
+    targetUserId
+  ) {
     await interaction.reply({
-      content: "❌ Você não participa desta aposta.",
+      content:
+        "❌ Esse botão pertence ao outro jogador.",
       ephemeral: true
     });
     return;
   }
 
-  if (bet.payments[targetUserId]) {
+  if (
+    !bet.players.includes(
+      interaction.user.id
+    )
+  ) {
     await interaction.reply({
-      content: "✅ Seu pagamento já foi confirmado.",
+      content:
+        "❌ Você não participa desta aposta.",
       ephemeral: true
     });
     return;
   }
 
-  bet.payments[targetUserId] = true;
+  if (
+    bet.payments[targetUserId]
+  ) {
+    await interaction.reply({
+      content:
+        "✅ Seu pagamento já foi confirmado.",
+      ephemeral: true
+    });
+    return;
+  }
+
+  await interaction.deferReply({
+    ephemeral: true
+  });
+
+  bet.payments[targetUserId] =
+    true;
 
   const allPaid =
     bet.players.every(
-      userId => bet.payments[userId] === true
+      userId =>
+        bet.payments[userId] === true
     );
 
   if (allPaid) {
-    bet.status = "aguardando_sala";
+    bet.status =
+      "aguardando_sala";
   }
 
   saveDatabase();
@@ -1588,53 +2473,95 @@ async function confirmPayment(interaction, bet, targetUserId) {
     embeds: [
       betEmbed(bet)
     ],
-    components: allPaid
-      ? []
-      : betPaymentButtons(bet)
+    components:
+      allPaid
+        ? []
+        : betPaymentButtons(bet)
   }).catch(() => {});
 
-  await interaction.reply({
-    content: allPaid
-      ? "✅ Pagamento confirmado. Os dois jogadores confirmaram o pagamento."
-      : "✅ Pagamento confirmado.",
-    ephemeral: true
+  await interaction.editReply({
+    content:
+      allPaid
+        ? "✅ Pagamento confirmado. Os dois jogadores confirmaram o pagamento."
+        : "✅ Pagamento confirmado."
   });
 
   if (allPaid) {
     await interaction.channel.send(
       "💰 Os dois jogadores confirmaram o pagamento. Aguardando o mediador abrir a sala."
-    );
+    ).catch(() => {});
   }
+}
+
+// ============================================================
+// VERIFICAR MEDIADOR DA APOSTA
+// ============================================================
+
+function canControlBet(
+  interaction,
+  bet
+) {
+  if (
+    !isMediator(
+      interaction.member,
+      interaction.guild.id
+    )
+  ) {
+    return {
+      ok: false,
+      message:
+        "❌ Apenas mediadores podem controlar esta aposta."
+    };
+  }
+
+  if (
+    bet.mediatorId &&
+    bet.mediatorId !==
+      interaction.user.id
+  ) {
+    return {
+      ok: false,
+      message:
+        `❌ O mediador desta aposta é <@${bet.mediatorId}>.`
+    };
+  }
+
+  return {
+    ok: true
+  };
 }
 
 // ============================================================
 // ABRIR SALA
 // ============================================================
 
-async function openRoom(interaction, bet) {
-  if (!isMediator(interaction.member, interaction.guild.id)) {
+async function openRoom(
+  interaction,
+  bet
+) {
+  const permission =
+    canControlBet(
+      interaction,
+      bet
+    );
+
+  if (!permission.ok) {
     await interaction.reply({
-      content: "❌ Apenas mediadores podem abrir a sala.",
+      content:
+        permission.message,
       ephemeral: true
     });
     return;
   }
 
-  if (
-    bet.mediatorId &&
-    bet.mediatorId !== interaction.user.id
-  ) {
-    await interaction.reply({
-      content: `❌ O mediador desta aposta é <@${bet.mediatorId}>.`,
-      ephemeral: true
-    });
-    return;
-  }
-
-  bet.mediatorId = interaction.user.id;
+  bet.mediatorId =
+    interaction.user.id;
 
   saveDatabase();
 
+  // IMPORTANTE:
+  // showModal acontece imediatamente.
+  // Nenhum await demorado antes dele.
   await interaction.showModal(
     roomModal(bet.id)
   );
@@ -1644,34 +2571,75 @@ async function openRoom(interaction, bet) {
 // PROCESSAR SALA
 // ============================================================
 
-async function processRoomModal(interaction, bet) {
+async function processRoomModal(
+  interaction,
+  bet
+) {
   const roomId =
-    interaction.fields.getTextInputValue("room_id");
+    interaction.fields
+      .getTextInputValue(
+        "room_id"
+      )
+      .trim();
 
   const password =
-    interaction.fields.getTextInputValue("room_password");
+    interaction.fields
+      .getTextInputValue(
+        "room_password"
+      )
+      .trim();
 
-  bet.roomId = roomId;
-  bet.roomPassword = password;
-  bet.status = "em_andamento";
-  bet.mediatorId = interaction.user.id;
+  const permission =
+    canControlBet(
+      interaction,
+      bet
+    );
+
+  if (!permission.ok) {
+    await interaction.reply({
+      content:
+        permission.message,
+      ephemeral: true
+    });
+    return;
+  }
+
+  await interaction.deferReply();
+
+  bet.roomId =
+    roomId;
+
+  bet.roomPassword =
+    password;
+
+  bet.status =
+    "em_andamento";
+
+  bet.mediatorId =
+    interaction.user.id;
 
   saveDatabase();
 
-  await interaction.reply({
-    embeds: [
-      new EmbedBuilder()
-        .setTitle("🏠 SALA ABERTA")
-        .setDescription(
-          [
-            `🆔 ID da sala: **${roomId}**`,
-            `🔑 Senha: **${password}**`,
-            "",
-            `👥 <@${bet.players[0]}>`,
-            `👥 <@${bet.players[1]}>`
-          ].join("\n")
-        )
-    ]
+  const embed =
+    new EmbedBuilder()
+      .setTitle("🏠 SALA ABERTA")
+      .setDescription(
+        [
+          `🆔 ID da sala: **${roomId}**`,
+          `🔑 Senha: **${password}**`,
+          "",
+          `👥 <@${bet.players[0]}>`,
+          `👥 <@${bet.players[1]}>`
+        ].join("\n")
+      );
+
+  applyGuildColor(
+    embed,
+    bet.guildId
+  );
+
+  await interaction.editReply({
+    embeds: [embed]
   });
 }
 
@@ -1679,28 +2647,42 @@ async function processRoomModal(interaction, bet) {
 // ESCOLHER VENCEDOR
 // ============================================================
 
-async function chooseWinner(interaction, bet) {
-  if (!isMediator(interaction.member, interaction.guild.id)) {
+async function chooseWinner(
+  interaction,
+  bet
+) {
+  const permission =
+    canControlBet(
+      interaction,
+      bet
+    );
+
+  if (!permission.ok) {
     await interaction.reply({
-      content: "❌ Apenas mediadores podem escolher o vencedor.",
+      content:
+        permission.message,
       ephemeral: true
     });
     return;
   }
 
   if (
-    bet.mediatorId &&
-    bet.mediatorId !== interaction.user.id
+    bet.resultRecorded
   ) {
     await interaction.reply({
-      content: `❌ O mediador desta aposta é <@${bet.mediatorId}>.`,
+      content:
+        "❌ O resultado desta aposta já foi registrado.",
       ephemeral: true
     });
     return;
   }
 
-  bet.mediatorId = interaction.user.id;
+  bet.mediatorId =
+    interaction.user.id;
 
+  saveDatabase();
+
+  // Sem awaits demorados antes do modal.
   await interaction.showModal(
     winnerModal(bet.id)
   );
@@ -1710,32 +2692,84 @@ async function chooseWinner(interaction, bet) {
 // PROCESSAR VENCEDOR
 // ============================================================
 
-async function processWinnerModal(interaction, bet) {
-  const winnerId =
-    interaction.fields.getTextInputValue("winner_id").trim();
+async function processWinnerModal(
+  interaction,
+  bet
+) {
+  const permission =
+    canControlBet(
+      interaction,
+      bet
+    );
 
-  if (!bet.players.includes(winnerId)) {
+  if (!permission.ok) {
     await interaction.reply({
-      content: "❌ O ID informado não pertence a nenhum dos jogadores.",
+      content:
+        permission.message,
+      ephemeral: true
+    });
+    return;
+  }
+
+  if (
+    bet.resultRecorded
+  ) {
+    await interaction.reply({
+      content:
+        "❌ O resultado desta aposta já foi registrado.",
+      ephemeral: true
+    });
+    return;
+  }
+
+  const winnerId =
+    interaction.fields
+      .getTextInputValue(
+        "winner_id"
+      )
+      .trim()
+      .replace(/[<@!>]/g, "");
+
+  if (
+    !bet.players.includes(
+      winnerId
+    )
+  ) {
+    await interaction.reply({
+      content:
+        "❌ O ID informado não pertence a nenhum dos jogadores.",
       ephemeral: true
     });
     return;
   }
 
   const loserId =
-    bet.players.find(id => id !== winnerId);
+    bet.players.find(
+      id => id !== winnerId
+    );
 
   if (!loserId) {
     await interaction.reply({
-      content: "❌ Não foi possível identificar o perdedor.",
+      content:
+        "❌ Não foi possível identificar o perdedor.",
       ephemeral: true
     });
     return;
   }
 
-  bet.winnerId = winnerId;
-  bet.status = "finalizada";
-  bet.mediatorId = interaction.user.id;
+  await interaction.deferReply();
+
+  bet.winnerId =
+    winnerId;
+
+  bet.status =
+    "finalizada";
+
+  bet.mediatorId =
+    interaction.user.id;
+
+  bet.resultRecorded =
+    true;
 
   registerBetResult(
     interaction.guild.id,
@@ -1747,19 +2781,25 @@ async function processWinnerModal(interaction, bet) {
 
   saveDatabase();
 
-  await interaction.reply({
-    embeds: [
-      new EmbedBuilder()
-        .setTitle("🏆 RESULTADO")
-        .setDescription(
-          [
-            `🏆 Vencedor: <@${winnerId}>`,
-            `❌ Perdedor: <@${loserId}>`,
-            "",
-            `💰 Valor: ${moneyBRL(bet.value)}`
-          ].join("\n")
-        )
-    ]
+  const embed =
+    new EmbedBuilder()
+      .setTitle("🏆 RESULTADO")
+      .setDescription(
+        [
+          `🏆 Vencedor: <@${winnerId}>`,
+          `❌ Perdedor: <@${loserId}>`,
+          "",
+          `💰 Valor: ${moneyBRL(bet.value)}`
+        ].join("\n")
+      );
+
+  applyGuildColor(
+    embed,
+    bet.guildId
+  );
+
+  await interaction.editReply({
+    embeds: [embed]
   });
 }
 
@@ -1767,224 +2807,304 @@ async function processWinnerModal(interaction, bet) {
 // VITÓRIA POR W.O.
 // ============================================================
 
-async function handleWO(interaction, bet) {
-  if (!isMediator(interaction.member, interaction.guild.id)) {
+async function handleWO(
+  interaction,
+  bet
+) {
+  const permission =
+    canControlBet(
+      interaction,
+      bet
+    );
+
+  if (!permission.ok) {
     await interaction.reply({
-      content: "❌ Apenas mediadores podem registrar W.O.",
+      content:
+        permission.message,
       ephemeral: true
     });
     return;
   }
 
   if (
-    bet.mediatorId &&
-    bet.mediatorId !== interaction.user.id
+    bet.resultRecorded
   ) {
     await interaction.reply({
-      content: `❌ O mediador desta aposta é <@${bet.mediatorId}>.`,
+      content:
+        "❌ O resultado desta aposta já foi registrado.",
       ephemeral: true
     });
     return;
   }
 
-  bet.mediatorId = interaction.user.id;
+  bet.mediatorId =
+    interaction.user.id;
 
-  const availablePlayer =
-    bet.players.find(
-      userId => userId !== interaction.user.id
-    );
-
-  if (!availablePlayer) {
-    await interaction.reply({
-      content: "❌ Não foi possível identificar o vencedor por W.O.",
-      ephemeral: true
-    });
-    return;
-  }
-
-  await interaction.channel.send({
-    content:
-      "⚠️ Para registrar W.O., informe no comando abaixo o ID do jogador vencedor:\n" +
-      "`.wo <ID>`"
-  });
+  saveDatabase();
 
   await interaction.reply({
-    content: "⚠️ Solicitação de W.O. iniciada.",
+    content:
+      "⚠️ Para registrar W.O., informe no comando abaixo o ID do jogador vencedor:\n`.wo <ID>`",
     ephemeral: true
   });
-}// ============================================================
-// CONFIGURAÇÃO — SELEÇÃO DE CANAIS
+}
+
+// ============================================================
+// CONFIG — SEGURANÇA
 // ============================================================
 
-async function handleConfigChannelSelect(interaction) {
-  const selectedId = interaction.values[0];
-  const config = getGuildConfig(interaction.guild.id);
+async function ensureAdminInteraction(
+  interaction
+) {
+  if (
+    !interaction.guild ||
+    !isAdmin(interaction.member)
+  ) {
+    if (
+      interaction.replied ||
+      interaction.deferred
+    ) {
+      await interaction.followUp({
+        content:
+          "❌ Apenas administradores podem usar esta configuração.",
+        ephemeral: true
+      }).catch(() => {});
+    } else {
+      await interaction.reply({
+        content:
+          "❌ Apenas administradores podem usar esta configuração.",
+        ephemeral: true
+      }).catch(() => {});
+    }
 
-  switch (interaction.customId) {
+    return false;
+  }
+
+  return true;
+}
+
+// ============================================================
+// CONFIG — SELEÇÃO DE CANAIS
+// ============================================================
+
+async function handleConfigChannelSelect(
+  interaction
+) {
+  if (
+    !(await ensureAdminInteraction(
+      interaction
+    ))
+  ) {
+    return;
+  }
+
+  const selectedId =
+    interaction.values[0];
+
+  const config =
+    getGuildConfig(
+      interaction.guild.id
+    );
+
+  const channel =
+    interaction.guild.channels.cache.get(
+      selectedId
+    );
+
+  if (!channel) {
+    await interaction.reply({
+      content:
+        "❌ Canal não encontrado.",
+      ephemeral: true
+    });
+    return;
+  }
+
+  switch (
+    interaction.customId
+  ) {
     case "cfg_mobile_select": {
-      const channel =
-        interaction.guild.channels.cache.get(selectedId);
-
-      if (!channel) {
+      if (!channel.isTextBased()) {
         await interaction.reply({
-          content: "❌ Canal não encontrado.",
+          content:
+            "❌ Selecione um canal que permita mensagens.",
           ephemeral: true
         });
         return;
       }
 
-      config.mobileChannelId = selectedId;
-      saveDatabase();
+      config.mobileChannelId =
+        selectedId;
 
-      await interaction.update({
-        embeds: [
-          configEmbed(interaction.guild.id)
-        ],
-        components: configButtons()
-      });
-
-      return;
+      break;
     }
 
     case "cfg_emulator_select": {
-      const channel =
-        interaction.guild.channels.cache.get(selectedId);
-
-      if (!channel) {
+      if (!channel.isTextBased()) {
         await interaction.reply({
-          content: "❌ Canal não encontrado.",
+          content:
+            "❌ Selecione um canal que permita mensagens.",
           ephemeral: true
         });
         return;
       }
 
-      config.emulatorChannelId = selectedId;
-      saveDatabase();
+      config.emulatorChannelId =
+        selectedId;
 
-      await interaction.update({
-        embeds: [
-          configEmbed(interaction.guild.id)
-        ],
-        components: configButtons()
-      });
-
-      return;
+      break;
     }
 
     case "cfg_category_select": {
-      const channel =
-        interaction.guild.channels.cache.get(selectedId);
-
-      if (!channel || channel.type !== ChannelType.GuildCategory) {
+      if (
+        channel.type !==
+        ChannelType.GuildCategory
+      ) {
         await interaction.reply({
-          content: "❌ Você precisa selecionar uma categoria.",
+          content:
+            "❌ Você precisa selecionar uma categoria.",
           ephemeral: true
         });
         return;
       }
 
-      config.betsCategoryId = selectedId;
-      saveDatabase();
+      config.betsCategoryId =
+        selectedId;
 
-      await interaction.update({
-        embeds: [
-          configEmbed(interaction.guild.id)
-        ],
-        components: configButtons()
-      });
-
-      return;
+      break;
     }
 
     case "cfg_mobile_analysis_select": {
-      const channel =
-        interaction.guild.channels.cache.get(selectedId);
-
-      if (!channel || !channel.isTextBased()) {
+      if (!channel.isTextBased()) {
         await interaction.reply({
-          content: "❌ Selecione um canal de texto.",
+          content:
+            "❌ Selecione um canal de texto.",
           ephemeral: true
         });
         return;
       }
 
-      config.mobileAnalysisChannelId = selectedId;
-      saveDatabase();
+      config.mobileAnalysisChannelId =
+        selectedId;
 
-      await interaction.update({
-        embeds: [
-          configEmbed(interaction.guild.id)
-        ],
-        components: configButtons()
-      });
-
-      return;
+      break;
     }
 
     case "cfg_emulator_analysis_select": {
-      const channel =
-        interaction.guild.channels.cache.get(selectedId);
-
-      if (!channel || !channel.isTextBased()) {
+      if (!channel.isTextBased()) {
         await interaction.reply({
-          content: "❌ Selecione um canal de texto.",
+          content:
+            "❌ Selecione um canal de texto.",
           ephemeral: true
         });
         return;
       }
 
-      config.emulatorAnalysisChannelId = selectedId;
-      saveDatabase();
+      config.emulatorAnalysisChannelId =
+        selectedId;
 
-      await interaction.update({
-        embeds: [
-          configEmbed(interaction.guild.id)
-        ],
-        components: configButtons()
-      });
-
-      return;
+      break;
     }
 
     default:
       return;
-  }
-}
-
-// ============================================================
-// CONFIGURAÇÃO — CARGOS
-// ============================================================
-
-async function handleConfigRoleSelect(interaction) {
-  const roleId = interaction.values[0];
-  const config = getGuildConfig(interaction.guild.id);
-
-  if (interaction.customId === "cfg_mediator_role_select") {
-    config.mediatorRoleId = roleId;
-  }
-
-  if (interaction.customId === "cfg_analyst_role_select") {
-    config.analystRoleId = roleId;
   }
 
   saveDatabase();
 
   await interaction.update({
     embeds: [
-      configEmbed(interaction.guild.id)
+      configEmbed(
+        interaction.guild.id
+      )
     ],
-    components: configButtons()
+    components:
+      configButtons()
   });
 }
 
 // ============================================================
-// CONFIGURAÇÃO — MEDIADORES
+// CONFIG — CARGOS
 // ============================================================
 
-function mediatorsListEmbed(guildId) {
-  const config = getGuildConfig(guildId);
+async function handleConfigRoleSelect(
+  interaction
+) {
+  if (
+    !(await ensureAdminInteraction(
+      interaction
+    ))
+  ) {
+    return;
+  }
 
-  if (config.mediators.length === 0) {
+  const roleId =
+    interaction.values[0];
+
+  const role =
+    interaction.guild.roles.cache.get(
+      roleId
+    );
+
+  if (!role) {
+    await interaction.reply({
+      content:
+        "❌ Cargo não encontrado.",
+      ephemeral: true
+    });
+    return;
+  }
+
+  const config =
+    getGuildConfig(
+      interaction.guild.id
+    );
+
+  if (
+    interaction.customId ===
+    "cfg_mediator_role_select"
+  ) {
+    config.mediatorRoleId =
+      roleId;
+  }
+
+  if (
+    interaction.customId ===
+    "cfg_analyst_role_select"
+  ) {
+    config.analystRoleId =
+      roleId;
+  }
+
+  saveDatabase();
+
+  await interaction.update({
+    embeds: [
+      configEmbed(
+        interaction.guild.id
+      )
+    ],
+    components:
+      configButtons()
+  });
+}
+
+// ============================================================
+// CONFIG — MEDIADORES
+// ============================================================
+
+function mediatorsListEmbed(
+  guildId
+) {
+  const config =
+    getGuildConfig(
+      guildId
+    );
+
+  if (
+    config.mediators.length ===
+    0
+  ) {
     return new EmbedBuilder()
       .setTitle("👥 MEDIADORES")
       .setDescription(
@@ -1992,61 +3112,106 @@ function mediatorsListEmbed(guildId) {
       );
   }
 
-  const lines = config.mediators.map(
-    (mediator, index) => {
-      return [
-        `**${index + 1}. ${mediator.name}**`,
-        `👤 <@${mediator.id}>`,
-        `💳 Pix: \`${mediator.pix}\``,
-        mediator.qr
-          ? `📷 QR Code: ${mediator.qr}`
-          : "📷 QR Code: não informado"
-      ].join("\n");
-    }
-  );
+  const lines =
+    config.mediators.map(
+      (mediator, index) => {
+        return [
+          `**${index + 1}. ${mediator.name}**`,
+          `👤 <@${mediator.id}>`,
+          `💳 Pix: \`${mediator.pix}\``,
+          mediator.qr
+            ? `📷 QR Code: ${mediator.qr}`
+            : "📷 QR Code: não informado"
+        ].join("\n");
+      }
+    );
 
-  return new EmbedBuilder()
-    .setTitle("👥 MEDIADORES")
-    .setDescription(
-      lines.join("\n\n")
-    )
-    .setFooter({
-      text: `${config.mediators.length}/${MAX_MEDIATORS} mediadores`
-    });
+  const embed =
+    new EmbedBuilder()
+      .setTitle("👥 MEDIADORES")
+      .setDescription(
+        lines.join("\n\n")
+      )
+      .setFooter({
+        text:
+          `${config.mediators.length}/${MAX_MEDIATORS} mediadores`
+      });
+
+  return applyGuildColor(
+    embed,
+    guildId
+  );
 }
 
-function mediatorRemoveSelect(guildId) {
-  const config = getGuildConfig(guildId);
+function mediatorRemoveSelect(
+  guildId
+) {
+  const config =
+    getGuildConfig(
+      guildId
+    );
 
-  if (config.mediators.length === 0) {
+  if (
+    config.mediators.length ===
+    0
+  ) {
     return null;
   }
 
-  return new ActionRowBuilder().addComponents(
-    new StringSelectMenuBuilder()
-      .setCustomId("cfg_remove_mediator_select")
-      .setPlaceholder("➖ Escolha o mediador")
-      .setMinValues(1)
-      .setMaxValues(1)
-      .addOptions(
-        config.mediators.map(mediator => ({
-          label: mediator.name.slice(0, 100),
-          description: mediator.id,
-          value: mediator.id,
-          emoji: "👤"
-        }))
-      )
-  );
+  return new ActionRowBuilder()
+    .addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(
+          "cfg_remove_mediator_select"
+        )
+        .setPlaceholder(
+          "➖ Escolha o mediador"
+        )
+        .setMinValues(1)
+        .setMaxValues(1)
+        .addOptions(
+          config.mediators.map(
+            mediator => ({
+              label:
+                mediator.name.slice(
+                  0,
+                  100
+                ),
+              description:
+                mediator.id,
+              value:
+                mediator.id,
+              emoji: "👤"
+            })
+          )
+        )
+    );
 }
 
 // ============================================================
-// CONFIGURAÇÃO — ADICIONAR MEDIADOR
+// CONFIG — ADICIONAR MEDIADOR
 // ============================================================
 
-async function addMediatorId(interaction) {
-  const config = getGuildConfig(interaction.guild.id);
+async function addMediatorId(
+  interaction
+) {
+  if (
+    !(await ensureAdminInteraction(
+      interaction
+    ))
+  ) {
+    return;
+  }
 
-  if (config.mediators.length >= MAX_MEDIATORS) {
+  const config =
+    getGuildConfig(
+      interaction.guild.id
+    );
+
+  if (
+    config.mediators.length >=
+    MAX_MEDIATORS
+  ) {
     await interaction.reply({
       content:
         `❌ Limite máximo atingido: ${MAX_MEDIATORS}/${MAX_MEDIATORS} mediadores.`,
@@ -2055,40 +3220,65 @@ async function addMediatorId(interaction) {
     return;
   }
 
+  // IMPORTANTE:
+  // O modal é aberto imediatamente.
+  // Não fazemos fetch antes dele.
   await interaction.showModal(
     mediatorAddIdModal()
   );
 }
 
-async function processMediatorId(interaction) {
+// ============================================================
+// CONFIG — PROCESSAR ID
+// ============================================================
+
+async function processMediatorId(
+  interaction
+) {
   const userId =
     interaction.fields
-      .getTextInputValue("mediator_id")
-      .trim();
-
-  if (!/^\d{17,20}$/.test(userId)) {
-    await interaction.reply({
-      content: "❌ O ID do Discord informado é inválido.",
-      ephemeral: true
-    });
-    return;
-  }
-
-  const config = getGuildConfig(interaction.guild.id);
+      .getTextInputValue(
+        "mediator_id"
+      )
+      .trim()
+      .replace(/[<@!>]/g, "");
 
   if (
-    config.mediators.some(
-      mediator => mediator.id === userId
+    !/^\d{17,20}$/.test(
+      userId
     )
   ) {
     await interaction.reply({
-      content: "❌ Este usuário já está cadastrado como mediador.",
+      content:
+        "❌ O ID do Discord informado é inválido.",
       ephemeral: true
     });
     return;
   }
 
-  if (config.mediators.length >= MAX_MEDIATORS) {
+  const config =
+    getGuildConfig(
+      interaction.guild.id
+    );
+
+  if (
+    config.mediators.some(
+      mediator =>
+        mediator.id === userId
+    )
+  ) {
+    await interaction.reply({
+      content:
+        "❌ Este usuário já está cadastrado como mediador.",
+      ephemeral: true
+    });
+    return;
+  }
+
+  if (
+    config.mediators.length >=
+    MAX_MEDIATORS
+  ) {
     await interaction.reply({
       content:
         `❌ Limite máximo atingido: ${MAX_MEDIATORS}/${MAX_MEDIATORS}.`,
@@ -2096,6 +3286,103 @@ async function processMediatorId(interaction) {
     });
     return;
   }
+
+  // ==========================================================
+  // CORREÇÃO PRINCIPAL DO "A AÇÃO NÃO PÔDE SER CONCLUÍDA"
+  // ==========================================================
+  //
+  // NÃO fazemos:
+  // await guild.members.fetch(userId)
+  // antes de showModal().
+  //
+  // O Discord pode expirar o modal nesse intervalo.
+  //
+  // A validação de membro será feita ao salvar os dados.
+  //
+
+  await interaction.showModal(
+    mediatorDataModal(
+      userId
+    )
+  );
+}
+
+// ============================================================
+// CONFIG — SALVAR MEDIADOR
+// ============================================================
+
+async function processMediatorData(
+  interaction
+) {
+  if (
+    !(await ensureAdminInteraction(
+      interaction
+    ))
+  ) {
+    return;
+  }
+
+  const userId =
+    interaction.customId
+      .split("|")[1];
+
+  const name =
+    interaction.fields
+      .getTextInputValue(
+        "mediator_name"
+      )
+      .trim();
+
+  const pix =
+    interaction.fields
+      .getTextInputValue(
+        "mediator_pix"
+      )
+      .trim();
+
+  const qr =
+    interaction.fields
+      .getTextInputValue(
+        "mediator_qr"
+      )
+      .trim();
+
+  const config =
+    getGuildConfig(
+      interaction.guild.id
+    );
+
+  if (
+    config.mediators.length >=
+    MAX_MEDIATORS
+  ) {
+    await interaction.reply({
+      content:
+        `❌ Limite máximo atingido: ${MAX_MEDIATORS}/${MAX_MEDIATORS}.`,
+      ephemeral: true
+    });
+    return;
+  }
+
+  if (
+    config.mediators.some(
+      mediator =>
+        mediator.id === userId
+    )
+  ) {
+    await interaction.reply({
+      content:
+        "❌ Este usuário já está cadastrado como mediador.",
+      ephemeral: true
+    });
+    return;
+  }
+
+  // Agora podemos fazer o fetch porque a interação
+  // será respondida imediatamente com deferReply().
+  await interaction.deferReply({
+    ephemeral: true
+  });
 
   const member =
     await interaction.guild.members
@@ -2103,62 +3390,9 @@ async function processMediatorId(interaction) {
       .catch(() => null);
 
   if (!member) {
-    await interaction.reply({
+    await interaction.editReply({
       content:
-        "❌ Não encontrei esse usuário neste servidor.",
-      ephemeral: true
-    });
-    return;
-  }
-
-  await interaction.showModal(
-    mediatorDataModal(userId)
-  );
-}
-
-// ============================================================
-// CONFIGURAÇÃO — SALVAR MEDIADOR
-// ============================================================
-
-async function processMediatorData(interaction) {
-  const userId =
-    interaction.customId.split("|")[1];
-
-  const name =
-    interaction.fields
-      .getTextInputValue("mediator_name")
-      .trim();
-
-  const pix =
-    interaction.fields
-      .getTextInputValue("mediator_pix")
-      .trim();
-
-  const qr =
-    interaction.fields
-      .getTextInputValue("mediator_qr")
-      .trim();
-
-  const config = getGuildConfig(interaction.guild.id);
-
-  if (config.mediators.length >= MAX_MEDIATORS) {
-    await interaction.reply({
-      content:
-        `❌ Limite máximo atingido: ${MAX_MEDIATORS}/${MAX_MEDIATORS}.`,
-      ephemeral: true
-    });
-    return;
-  }
-
-  if (
-    config.mediators.some(
-      mediator => mediator.id === userId
-    )
-  ) {
-    await interaction.reply({
-      content:
-        "❌ Este usuário já está cadastrado como mediador.",
-      ephemeral: true
+        "❌ Não encontrei esse usuário neste servidor."
     });
     return;
   }
@@ -2172,94 +3406,171 @@ async function processMediatorData(interaction) {
 
   saveDatabase();
 
-  await interaction.reply({
+  await interaction.editReply({
     content:
-      `✅ Mediador **${name}** adicionado. (${config.mediators.length}/${MAX_MEDIATORS})`,
-    ephemeral: true
+      `✅ Mediador **${name}** adicionado. (${config.mediators.length}/${MAX_MEDIATORS})`
   });
 }
 
 // ============================================================
-// CONFIGURAÇÃO — REMOVER MEDIADOR
+// CONFIG — REMOVER MEDIADOR
 // ============================================================
 
-async function removeMediator(interaction) {
-  const config = getGuildConfig(interaction.guild.id);
+async function removeMediator(
+  interaction
+) {
+  if (
+    !(await ensureAdminInteraction(
+      interaction
+    ))
+  ) {
+    return;
+  }
 
-  if (config.mediators.length === 0) {
+  const config =
+    getGuildConfig(
+      interaction.guild.id
+    );
+
+  if (
+    config.mediators.length ===
+    0
+  ) {
     await interaction.reply({
-      content: "❌ Não existem mediadores cadastrados.",
+      content:
+        "❌ Não existem mediadores cadastrados.",
       ephemeral: true
     });
     return;
   }
 
-  const select = mediatorRemoveSelect(
-    interaction.guild.id
-  );
+  const select =
+    mediatorRemoveSelect(
+      interaction.guild.id
+    );
 
   await interaction.reply({
-    content: "➖ Escolha o mediador que deseja remover:",
-    components: select ? [select] : [],
+    content:
+      "➖ Escolha o mediador que deseja remover:",
+    components:
+      select ? [select] : [],
     ephemeral: true
   });
 }
 
-async function processRemoveMediator(interaction) {
-  const userId = interaction.values[0];
+async function processRemoveMediator(
+  interaction
+) {
+  if (
+    !(await ensureAdminInteraction(
+      interaction
+    ))
+  ) {
+    return;
+  }
 
-  const config = getGuildConfig(interaction.guild.id);
+  const userId =
+    interaction.values[0];
+
+  const config =
+    getGuildConfig(
+      interaction.guild.id
+    );
 
   const index =
     config.mediators.findIndex(
-      mediator => mediator.id === userId
+      mediator =>
+        mediator.id === userId
     );
 
   if (index === -1) {
     await interaction.reply({
-      content: "❌ Mediador não encontrado.",
+      content:
+        "❌ Mediador não encontrado.",
       ephemeral: true
     });
     return;
   }
 
+  await interaction.deferUpdate();
+
   const removed =
-    config.mediators.splice(index, 1)[0];
+    config.mediators.splice(
+      index,
+      1
+    )[0];
+
+  // Remove também da fila.
+  config.mediatorQueue =
+    config.mediatorQueue.filter(
+      id => id !== userId
+    );
+
+  if (
+    config.mediatorRotation >=
+    config.mediatorQueue.length
+  ) {
+    config.mediatorRotation = 0;
+  }
 
   saveDatabase();
 
-  await interaction.update({
+  await interaction.editReply({
     content:
       `✅ Mediador **${removed.name}** removido.`,
     components: []
-  });
+  }).catch(() => {});
+
+  await updateMediatorQueueMessages(
+    interaction.guild.id
+  );
 }
 
 // ============================================================
-// CONFIGURAÇÃO — TAXA
+// CONFIG — TAXA
 // ============================================================
 
-async function processFee(interaction) {
+async function processFee(
+  interaction
+) {
+  if (
+    !(await ensureAdminInteraction(
+      interaction
+    ))
+  ) {
+    return;
+  }
+
   const raw =
     interaction.fields
-      .getTextInputValue("fee")
+      .getTextInputValue(
+        "fee"
+      )
       .trim()
       .replace(",", ".");
 
-  const fee = Number(raw);
+  const fee =
+    Number(raw);
 
-  if (!Number.isFinite(fee) || fee < 0) {
+  if (
+    !Number.isFinite(fee) ||
+    fee < 0
+  ) {
     await interaction.reply({
-      content: "❌ Informe uma taxa válida.",
+      content:
+        "❌ Informe uma taxa válida.",
       ephemeral: true
     });
     return;
   }
 
   const config =
-    getGuildConfig(interaction.guild.id);
+    getGuildConfig(
+      interaction.guild.id
+    );
 
-  config.fee = fee;
+  config.fee =
+    fee;
 
   saveDatabase();
 
@@ -2271,22 +3582,141 @@ async function processFee(interaction) {
 }
 
 // ============================================================
-// ANÁLISE — ASSUMIR
+// CONFIG — COR
 // ============================================================
 
-async function claimAnalysis(interaction, analysis) {
-  if (!analysis) {
+async function processColor(
+  interaction
+) {
+  if (
+    !(await ensureAdminInteraction(
+      interaction
+    ))
+  ) {
+    return;
+  }
+
+  const raw =
+    interaction.fields
+      .getTextInputValue(
+        "color"
+      )
+      .trim();
+
+  if (
+    !/^#[0-9A-F]{6}$/i.test(
+      raw
+    )
+  ) {
     await interaction.reply({
-      content: "❌ Análise não encontrada.",
+      content:
+        "❌ Cor inválida. Use o formato `#5865F2`.",
       ephemeral: true
     });
     return;
   }
 
-  if (!isAnalyst(
-    interaction.member,
-    interaction.guild.id
-  )) {
+  const config =
+    getGuildConfig(
+      interaction.guild.id
+    );
+
+  config.appearance.color =
+    raw.toUpperCase();
+
+  saveDatabase();
+
+  await interaction.reply({
+    content:
+      `✅ Cor dos embeds alterada para **${raw.toUpperCase()}**.`,
+    ephemeral: true
+  });
+}
+
+// ============================================================
+// CONFIG — AVATAR
+// ============================================================
+
+async function processAvatar(
+  interaction
+) {
+  if (
+    !(await ensureAdminInteraction(
+      interaction
+    ))
+  ) {
+    return;
+  }
+
+  const url =
+    interaction.fields
+      .getTextInputValue(
+        "avatar_url"
+      )
+      .trim();
+
+  if (
+    !/^https?:\/\//i.test(
+      url
+    )
+  ) {
+    await interaction.reply({
+      content:
+        "❌ Informe uma URL válida começando com `https://`.",
+      ephemeral: true
+    });
+    return;
+  }
+
+  await interaction.deferReply({
+    ephemeral: true
+  });
+
+  try {
+    await client.user.setAvatar(
+      url
+    );
+
+    await interaction.editReply({
+      content:
+        "✅ Foto do bot alterada."
+    });
+  } catch (error) {
+    console.error(
+      "❌ Erro ao alterar avatar:",
+      error
+    );
+
+    await interaction.editReply({
+      content:
+        "❌ Não foi possível alterar a foto do bot. Verifique se a URL é uma imagem válida."
+    });
+  }
+}
+
+// ============================================================
+// ANÁLISE — ASSUMIR
+// ============================================================
+
+async function claimAnalysis(
+  interaction,
+  analysis
+) {
+  if (!analysis) {
+    await interaction.reply({
+      content:
+        "❌ Análise não encontrada.",
+      ephemeral: true
+    });
+    return;
+  }
+
+  if (
+    !isAnalyst(
+      interaction.member,
+      interaction.guild.id
+    )
+  ) {
     await interaction.reply({
       content:
         "❌ Apenas usuários com o cargo de Analista podem assumir esta análise.",
@@ -2295,7 +3725,14 @@ async function claimAnalysis(interaction, analysis) {
     return;
   }
 
-  if (analysis.status !== "aguardando") {
+  // ==========================================================
+  // LOCK DA ANÁLISE
+  // ==========================================================
+
+  if (
+    analysis.status !==
+    "aguardando"
+  ) {
     await interaction.reply({
       content:
         `❌ Esta análise já foi assumida por <@${analysis.analystId}>.`,
@@ -2304,23 +3741,36 @@ async function claimAnalysis(interaction, analysis) {
     return;
   }
 
-  const bet = getBet(analysis.betId);
+  const bet =
+    getBet(
+      analysis.betId
+    );
 
   if (!bet) {
     await interaction.reply({
-      content: "❌ Aposta vinculada à análise não encontrada.",
+      content:
+        "❌ Aposta vinculada à análise não encontrada.",
       ephemeral: true
     });
     return;
   }
 
-  analysis.status = "assumida";
-  analysis.analystId = interaction.user.id;
+  // Marca antes de qualquer operação demorada.
+  analysis.status =
+    "assumida";
 
-  bet.analystId = interaction.user.id;
+  analysis.analystId =
+    interaction.user.id;
+
+  bet.analystId =
+    interaction.user.id;
 
   saveDatabase();
 
+  // ACK rápido.
+  await interaction.deferUpdate();
+
+  // Dá acesso ao canal da aposta.
   if (bet.channelId) {
     const betChannel =
       await interaction.guild.channels
@@ -2328,18 +3778,20 @@ async function claimAnalysis(interaction, analysis) {
         .catch(() => null);
 
     if (betChannel) {
-      await betChannel.permissionOverwrites.edit(
-        interaction.user.id,
-        {
-          ViewChannel: true,
-          SendMessages: true,
-          ReadMessageHistory: true
-        }
-      ).catch(() => {});
+      await betChannel.permissionOverwrites
+        .edit(
+          interaction.user.id,
+          {
+            ViewChannel: true,
+            SendMessages: true,
+            ReadMessageHistory: true
+          }
+        )
+        .catch(() => {});
     }
   }
 
-  await interaction.update({
+  await interaction.message.edit({
     embeds: [
       analysisAssumedEmbed(
         analysis.type,
@@ -2348,24 +3800,57 @@ async function claimAnalysis(interaction, analysis) {
       )
     ],
     components: [
-      new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId("analysis_claimed")
-          .setLabel("Análise Assumida")
-          .setEmoji("✅")
-          .setStyle(ButtonStyle.Success)
-          .setDisabled(true)
-      )
+      new ActionRowBuilder()
+        .addComponents(
+          new ButtonBuilder()
+            .setCustomId(
+              "analysis_claimed"
+            )
+            .setLabel(
+              "Análise Assumida"
+            )
+            .setEmoji("✅")
+            .setStyle(
+              ButtonStyle.Success
+            )
+            .setDisabled(true)
+        )
     ]
-  });
+  }).catch(() => {});
 }
 
 // ============================================================
-// /FILA — PUBLICAÇÃO
+// /FILA — FORMATO
 // ============================================================
 
-async function handleFilaFormat(interaction) {
-  const format = interaction.values[0];
+async function handleFilaFormat(
+  interaction
+) {
+  const format =
+    interaction.values[0];
+
+  if (
+    !FORMATS.includes(
+      format
+    )
+  ) {
+    await interaction.reply({
+      content:
+        "❌ Formato inválido.",
+      ephemeral: true
+    });
+    return;
+  }
+
+  interaction.client.filaSelections ??=
+    new Map();
+
+  interaction.client.filaSelections.set(
+    interaction.user.id,
+    {
+      format
+    }
+  );
 
   await interaction.update({
     content:
@@ -2374,25 +3859,42 @@ async function handleFilaFormat(interaction) {
       filaModalitySelect()
     ]
   });
-
-  interaction.client.filaSelections ??= {};
-
-  interaction.client.filaSelections[interaction.user.id] = {
-    format
-  };
 }
 
-async function handleFilaModality(interaction) {
-  const modality = interaction.values[0];
+// ============================================================
+// /FILA — MODALIDADE
+// ============================================================
 
-  interaction.client.filaSelections ??= {};
+async function handleFilaModality(
+  interaction
+) {
+  const modality =
+    interaction.values[0];
+
+  if (
+    !MODALITIES.includes(
+      modality
+    )
+  ) {
+    await interaction.reply({
+      content:
+        "❌ Modalidade inválida.",
+      ephemeral: true
+    });
+    return;
+  }
+
+  interaction.client.filaSelections ??=
+    new Map();
 
   const selection =
-    interaction.client.filaSelections[
+    interaction.client.filaSelections.get(
       interaction.user.id
-    ];
+    );
 
-  if (!selection?.format) {
+  if (
+    !selection?.format
+  ) {
     await interaction.reply({
       content:
         "❌ A sessão da fila expirou. Use `/fila` novamente.",
@@ -2401,7 +3903,8 @@ async function handleFilaModality(interaction) {
     return;
   }
 
-  selection.modality = modality;
+  selection.modality =
+    modality;
 
   await interaction.update({
     content:
@@ -2414,17 +3917,28 @@ async function handleFilaModality(interaction) {
   });
 }
 
-async function handleFilaChannel(interaction) {
-  const channelId = interaction.values[0];
+// ============================================================
+// /FILA — CANAL
+// ============================================================
 
-  interaction.client.filaSelections ??= {};
+async function handleFilaChannel(
+  interaction
+) {
+  const channelId =
+    interaction.values[0];
+
+  interaction.client.filaSelections ??=
+    new Map();
 
   const selection =
-    interaction.client.filaSelections[
+    interaction.client.filaSelections.get(
       interaction.user.id
-    ];
+    );
 
-  if (!selection?.format || !selection?.modality) {
+  if (
+    !selection?.format ||
+    !selection?.modality
+  ) {
     await interaction.reply({
       content:
         "❌ A sessão da fila expirou. Use `/fila` novamente.",
@@ -2434,9 +3948,14 @@ async function handleFilaChannel(interaction) {
   }
 
   const channel =
-    interaction.guild.channels.cache.get(channelId);
+    interaction.guild.channels.cache.get(
+      channelId
+    );
 
-  if (!channel || !channel.isTextBased()) {
+  if (
+    !channel ||
+    !channel.isTextBased()
+  ) {
     await interaction.reply({
       content:
         "❌ O canal selecionado não permite publicação de mensagens.",
@@ -2445,6 +3964,7 @@ async function handleFilaChannel(interaction) {
     return;
   }
 
+  // ACK IMEDIATO antes de publicar 12 mensagens.
   await interaction.update({
     content:
       "⏳ Publicando as 12 filas...",
@@ -2452,28 +3972,25 @@ async function handleFilaChannel(interaction) {
   });
 
   try {
-    const queues = await publishQueues(
+    await publishQueues(
       interaction,
       channel,
       selection.format,
       selection.modality
     );
 
-    delete interaction.client.filaSelections[
+    interaction.client.filaSelections.delete(
       interaction.user.id
-    ];
+    );
 
     await interaction.editReply({
       content:
-        `✅ **12 filas publicadas com sucesso!**\n\n` +
+        `✅ **12 filas publicadas!**\n\n` +
         `🎯 Formato: **${selection.format}**\n` +
         `📱 Modalidade: **${selection.modality}**\n` +
-        `📢 Canal: ${channel}\n\n` +
-        `💰 De ${moneyBRL(VALUES[0])} até ${moneyBRL(VALUES[VALUES.length - 1])}.`,
+        `📢 Canal: ${channel}`,
       components: []
     });
-
-    return queues;
   } catch (error) {
     console.error(
       "❌ Erro ao publicar filas:",
@@ -2484,20 +4001,25 @@ async function handleFilaChannel(interaction) {
       content:
         "❌ Ocorreu um erro ao publicar as filas.",
       components: []
-    });
+    }).catch(() => {});
   }
 }
 
 // ============================================================
-// CONFIGURAÇÃO — ATUALIZAR PAINEL
+// CONFIG — ATUALIZAR PAINEL
 // ============================================================
 
-async function updateConfigPanel(interaction) {
+async function updateConfigPanel(
+  interaction
+) {
   await interaction.reply({
     embeds: [
-      configEmbed(interaction.guild.id)
+      configEmbed(
+        interaction.guild.id
+      )
     ],
-    components: configButtons(),
+    components:
+      configButtons(),
     ephemeral: true
   });
 }
@@ -2509,15 +4031,18 @@ async function updateConfigPanel(interaction) {
 const slashCommands = [
   {
     name: "fila",
-    description: "Publica as filas de apostas"
+    description:
+      "Publica as filas de apostas"
   },
   {
     name: "med",
-    description: "Publica a fila pública de mediadores"
+    description:
+      "Publica a fila pública de mediadores"
   },
   {
     name: "config",
-    description: "Configura o bot neste servidor"
+    description:
+      "Configura o bot neste servidor"
   }
 ];
 
@@ -2534,11 +4059,14 @@ async function registerCommands() {
       return;
     }
 
-    const guildId = process.env.GUILD_ID;
+    const guildId =
+      process.env.GUILD_ID;
 
     if (guildId) {
       const guild =
-        client.guilds.cache.get(guildId);
+        client.guilds.cache.get(
+          guildId
+        );
 
       if (guild) {
         await guild.commands.set(
@@ -2566,737 +4094,972 @@ async function registerCommands() {
       error
     );
   }
-}// ============================================================
+}
+
+// ============================================================
 // INTERAÇÕES
 // ============================================================
 
-client.on(Events.InteractionCreate, async interaction => {
-  try {
-    // ========================================================
-    // SLASH COMMANDS
-    // ========================================================
+client.on(
+  Events.InteractionCreate,
+  async interaction => {
+    try {
+      // ========================================================
+      // SLASH COMMANDS
+      // ========================================================
 
-    if (interaction.isChatInputCommand()) {
-      if (!interaction.guild) {
-        await interaction.reply({
-          content: "❌ Este comando só pode ser usado em um servidor.",
-          ephemeral: true
-        });
-        return;
-      }
-
-      // ------------------------------------------------------
-      // /fila
-      // ------------------------------------------------------
-
-      if (interaction.commandName === "fila") {
-        if (!isAdmin(interaction.member)) {
+      if (
+        interaction.isChatInputCommand()
+      ) {
+        if (!interaction.guild) {
           await interaction.reply({
             content:
-              "❌ Apenas administradores podem usar `/fila`.",
-            ephemeral: true
-          });
-          return;
-        }
-
-        await startFila(interaction);
-        return;
-      }
-
-      // ------------------------------------------------------
-      // /med
-      // ------------------------------------------------------
-
-      if (interaction.commandName === "med") {
-        if (!isAdmin(interaction.member)) {
-          await interaction.reply({
-            content:
-              "❌ Apenas administradores podem usar `/med`.",
-            ephemeral: true
-          });
-          return;
-        }
-
-        await publishMediatorQueue(interaction);
-        return;
-      }
-
-      // ------------------------------------------------------
-      // /config
-      // ------------------------------------------------------
-
-      if (interaction.commandName === "config") {
-        if (!isAdmin(interaction.member)) {
-          await interaction.reply({
-            content:
-              "❌ Apenas administradores podem usar `/config`.",
-            ephemeral: true
-          });
-          return;
-        }
-
-        await updateConfigPanel(interaction);
-        return;
-      }
-    }
-
-    // ========================================================
-    // BOTÕES
-    // ========================================================
-
-    if (interaction.isButton()) {
-      const id = interaction.customId;
-
-      // ------------------------------------------------------
-      // FILA — ENTRAR
-      // ------------------------------------------------------
-
-      if (id.startsWith("qe|")) {
-        const queueId = id.split("|")[1];
-        const queue = getQueue(queueId);
-
-        await enterQueue(
-          interaction,
-          queue
-        );
-
-        return;
-      }
-
-      // ------------------------------------------------------
-      // FILA — SAIR
-      // ------------------------------------------------------
-
-      if (id.startsWith("ql|")) {
-        const queueId = id.split("|")[1];
-        const queue = getQueue(queueId);
-
-        await leaveQueue(
-          interaction,
-          queue
-        );
-
-        return;
-      }
-
-      // ------------------------------------------------------
-      // FILA 1X1 — GELO
-      // ------------------------------------------------------
-
-      if (id.startsWith("qg|")) {
-        const parts = id.split("|");
-
-        const queueId = parts[1];
-        const gelo = parts[2];
-
-        const queue = getQueue(queueId);
-
-        await enterQueue(
-          interaction,
-          queue,
-          gelo
-        );
-
-        return;
-      }
-
-      // ------------------------------------------------------
-      // PAGAMENTO
-      // ------------------------------------------------------
-
-      if (id.startsWith("pay|")) {
-        const parts = id.split("|");
-
-        const betId = parts[1];
-        const targetUserId = parts[2];
-
-        const bet = getBet(betId);
-
-        await confirmPayment(
-          interaction,
-          bet,
-          targetUserId
-        );
-
-        return;
-      }
-
-      // ------------------------------------------------------
-      // ABRIR SALA
-      // ------------------------------------------------------
-
-      if (id.startsWith("room|")) {
-        const betId = id.split("|")[1];
-        const bet = getBet(betId);
-
-        if (!bet) {
-          await interaction.reply({
-            content: "❌ Aposta não encontrada.",
-            ephemeral: true
-          });
-          return;
-        }
-
-        await openRoom(
-          interaction,
-          bet
-        );
-
-        return;
-      }
-
-      // ------------------------------------------------------
-      // ESCOLHER VENCEDOR
-      // ------------------------------------------------------
-
-      if (id.startsWith("winner|")) {
-        const betId = id.split("|")[1];
-        const bet = getBet(betId);
-
-        if (!bet) {
-          await interaction.reply({
-            content: "❌ Aposta não encontrada.",
-            ephemeral: true
-          });
-          return;
-        }
-
-        await chooseWinner(
-          interaction,
-          bet
-        );
-
-        return;
-      }
-
-      // ------------------------------------------------------
-      // W.O.
-      // ------------------------------------------------------
-
-      if (id.startsWith("wo|")) {
-        const betId = id.split("|")[1];
-        const bet = getBet(betId);
-
-        if (!bet) {
-          await interaction.reply({
-            content: "❌ Aposta não encontrada.",
-            ephemeral: true
-          });
-          return;
-        }
-
-        await handleWO(
-          interaction,
-          bet
-        );
-
-        return;
-      }
-
-      // ------------------------------------------------------
-      // FINALIZAR APOSTA
-      // ------------------------------------------------------
-
-      if (id.startsWith("finish|")) {
-        const betId = id.split("|")[1];
-        const bet = getBet(betId);
-
-        if (!bet) {
-          await interaction.reply({
-            content: "❌ Aposta não encontrada.",
+              "❌ Este comando só pode ser usado em um servidor.",
             ephemeral: true
           });
           return;
         }
 
         if (
-          !isMediator(
-            interaction.member,
-            interaction.guild.id
+          interaction.commandName ===
+          "fila"
+        ) {
+          if (
+            !isAdmin(
+              interaction.member
+            )
+          ) {
+            await interaction.reply({
+              content:
+                "❌ Apenas administradores podem usar `/fila`.",
+              ephemeral: true
+            });
+            return;
+          }
+
+          await startFila(
+            interaction
+          );
+          return;
+        }
+
+        if (
+          interaction.commandName ===
+          "med"
+        ) {
+          if (
+            !isAdmin(
+              interaction.member
+            )
+          ) {
+            await interaction.reply({
+              content:
+                "❌ Apenas administradores podem usar `/med`.",
+              ephemeral: true
+            });
+            return;
+          }
+
+          await publishMediatorQueue(
+            interaction
+          );
+          return;
+        }
+
+        if (
+          interaction.commandName ===
+          "config"
+        ) {
+          if (
+            !isAdmin(
+              interaction.member
+            )
+          ) {
+            await interaction.reply({
+              content:
+                "❌ Apenas administradores podem usar `/config`.",
+              ephemeral: true
+            });
+            return;
+          }
+
+          await updateConfigPanel(
+            interaction
+          );
+          return;
+        }
+      }
+
+      // ========================================================
+      // BOTÕES
+      // ========================================================
+
+      if (
+        interaction.isButton()
+      ) {
+        const id =
+          interaction.customId;
+
+        // ------------------------------------------------------
+        // FILA — ENTRAR
+        // ------------------------------------------------------
+
+        if (
+          id.startsWith("qe|")
+        ) {
+          const queueId =
+            id.split("|")[1];
+
+          const queue =
+            getQueue(queueId);
+
+          await enterQueue(
+            interaction,
+            queue
+          );
+
+          return;
+        }
+
+        // ------------------------------------------------------
+        // FILA — SAIR
+        // ------------------------------------------------------
+
+        if (
+          id.startsWith("ql|")
+        ) {
+          const queueId =
+            id.split("|")[1];
+
+          const queue =
+            getQueue(queueId);
+
+          await leaveQueue(
+            interaction,
+            queue
+          );
+
+          return;
+        }
+
+        // ------------------------------------------------------
+        // FILA 1X1 — GELO
+        // ------------------------------------------------------
+
+        if (
+          id.startsWith("qg|")
+        ) {
+          const parts =
+            id.split("|");
+
+          const queueId =
+            parts[1];
+
+          const gelo =
+            parts[2];
+
+          const queue =
+            getQueue(queueId);
+
+          await enterQueue(
+            interaction,
+            queue,
+            gelo
+          );
+
+          return;
+        }
+
+        // ------------------------------------------------------
+        // FILA DE MEDIADORES — ENTRAR
+        // ------------------------------------------------------
+
+        if (
+          id === "medq_join"
+        ) {
+          await joinMediatorQueue(
+            interaction
+          );
+          return;
+        }
+
+        // ------------------------------------------------------
+        // FILA DE MEDIADORES — SAIR
+        // ------------------------------------------------------
+
+        if (
+          id === "medq_leave"
+        ) {
+          await leaveMediatorQueue(
+            interaction
+          );
+          return;
+        }
+
+        // ------------------------------------------------------
+        // PAGAMENTO
+        // ------------------------------------------------------
+
+        if (
+          id.startsWith("pay|")
+        ) {
+          const parts =
+            id.split("|");
+
+          const betId =
+            parts[1];
+
+          const targetUserId =
+            parts[2];
+
+          const bet =
+            getBet(betId);
+
+          await confirmPayment(
+            interaction,
+            bet,
+            targetUserId
+          );
+
+          return;
+        }
+
+        // ------------------------------------------------------
+        // ABRIR SALA
+        // ------------------------------------------------------
+
+        if (
+          id.startsWith("room|")
+        ) {
+          const betId =
+            id.split("|")[1];
+
+          const bet =
+            getBet(betId);
+
+          if (!bet) {
+            await interaction.reply({
+              content:
+                "❌ Aposta não encontrada.",
+              ephemeral: true
+            });
+            return;
+          }
+
+          await openRoom(
+            interaction,
+            bet
+          );
+
+          return;
+        }
+
+        // ------------------------------------------------------
+        // ESCOLHER VENCEDOR
+        // ------------------------------------------------------
+
+        if (
+          id.startsWith("winner|")
+        ) {
+          const betId =
+            id.split("|")[1];
+
+          const bet =
+            getBet(betId);
+
+          if (!bet) {
+            await interaction.reply({
+              content:
+                "❌ Aposta não encontrada.",
+              ephemeral: true
+            });
+            return;
+          }
+
+          await chooseWinner(
+            interaction,
+            bet
+          );
+
+          return;
+        }
+
+        // ------------------------------------------------------
+        // W.O.
+        // ------------------------------------------------------
+
+        if (
+          id.startsWith("wo|")
+        ) {
+          const betId =
+            id.split("|")[1];
+
+          const bet =
+            getBet(betId);
+
+          if (!bet) {
+            await interaction.reply({
+              content:
+                "❌ Aposta não encontrada.",
+              ephemeral: true
+            });
+            return;
+          }
+
+          await handleWO(
+            interaction,
+            bet
+          );
+
+          return;
+        }
+
+        // ------------------------------------------------------
+        // FINALIZAR APOSTA
+        // ------------------------------------------------------
+
+        if (
+          id.startsWith("finish|")
+        ) {
+          const betId =
+            id.split("|")[1];
+
+          const bet =
+            getBet(betId);
+
+          if (!bet) {
+            await interaction.reply({
+              content:
+                "❌ Aposta não encontrada.",
+              ephemeral: true
+            });
+            return;
+          }
+
+          const permission =
+            canControlBet(
+              interaction,
+              bet
+            );
+
+          if (!permission.ok) {
+            await interaction.reply({
+              content:
+                permission.message,
+              ephemeral: true
+            });
+            return;
+          }
+
+          // ACK IMEDIATO
+          await interaction.deferUpdate();
+
+          bet.mediatorId =
+            interaction.user.id;
+
+          saveDatabase();
+
+          await finalizeBetChannel(
+            interaction.channel,
+            bet
+          );
+
+          return;
+        }
+
+        // ------------------------------------------------------
+        // ANÁLISE — ASSUMIR
+        // ------------------------------------------------------
+
+        if (
+          id.startsWith(
+            "analysis_claim|"
           )
         ) {
-          await interaction.reply({
-            content:
-              "❌ Apenas mediadores podem finalizar a aposta.",
-            ephemeral: true
-          });
+          const analysisId =
+            id.split("|")[1];
+
+          const analysis =
+            db.analyses[
+              analysisId
+            ];
+
+          await claimAnalysis(
+            interaction,
+            analysis
+          );
+
           return;
         }
 
+        // ======================================================
+        // CONFIGURAÇÃO
+        // ======================================================
+
         if (
-          bet.mediatorId &&
-          bet.mediatorId !== interaction.user.id
+          id.startsWith("cfg_")
+        ) {
+          if (
+            !(await ensureAdminInteraction(
+              interaction
+            ))
+          ) {
+            return;
+          }
+        }
+
+        // ------------------------------------------------------
+        // CANAL MOBILE
+        // ------------------------------------------------------
+
+        if (
+          id === "cfg_mobile"
         ) {
           await interaction.reply({
             content:
-              `❌ O mediador desta aposta é <@${bet.mediatorId}>.`,
+              "📱 Escolha o canal Mobile:",
+            components: [
+              channelSelect(
+                "cfg_mobile_select",
+                "📱 Selecionar canal Mobile"
+              )
+            ],
             ephemeral: true
           });
+
           return;
         }
 
-        bet.mediatorId = interaction.user.id;
-
-        saveDatabase();
-
-        await interaction.deferUpdate();
-
-        await finalizeBetChannel(
-          interaction.channel,
-          bet
-        );
-
-        return;
-      }
-
-      // ------------------------------------------------------
-      // ANÁLISE — ASSUMIR
-      // ------------------------------------------------------
-
-      if (id.startsWith("analysis_claim|")) {
-        const analysisId =
-          id.split("|")[1];
-
-        const analysis =
-          db.analyses[analysisId];
-
-        await claimAnalysis(
-          interaction,
-          analysis
-        );
-
-        return;
-      }
-
-      // ------------------------------------------------------
-      // CONFIGURAÇÃO — CANAL MOBILE
-      // ------------------------------------------------------
-
-      if (id === "cfg_mobile") {
-        await interaction.reply({
-          content:
-            "📱 Escolha o canal Mobile:",
-          components: [
-            channelSelect(
-              "cfg_mobile_select",
-              "📱 Selecionar canal Mobile"
-            )
-          ],
-          ephemeral: true
-        });
-
-        return;
-      }
-
-      // ------------------------------------------------------
-      // CONFIGURAÇÃO — CANAL EMULADOR
-      // ------------------------------------------------------
-
-      if (id === "cfg_emulator") {
-        await interaction.reply({
-          content:
-            "🖥️ Escolha o canal Emulador:",
-          components: [
-            channelSelect(
-              "cfg_emulator_select",
-              "🖥️ Selecionar canal Emulador"
-            )
-          ],
-          ephemeral: true
-        });
-
-        return;
-      }
-
-      // ------------------------------------------------------
-      // CONFIGURAÇÃO — CATEGORIA
-      // ------------------------------------------------------
-
-      if (id === "cfg_category") {
-        await interaction.reply({
-          content:
-            "📁 Escolha a categoria das apostas:",
-          components: [
-            channelSelect(
-              "cfg_category_select",
-              "📁 Selecionar categoria"
-            )
-          ],
-          ephemeral: true
-        });
-
-        return;
-      }
-
-      // ------------------------------------------------------
-      // CONFIGURAÇÃO — CARGO MEDIADOR
-      // ------------------------------------------------------
-
-      if (id === "cfg_mediator_role") {
-        await interaction.reply({
-          content:
-            "👮 Escolha o cargo de Mediador:",
-          components: [
-            roleSelect(
-              "cfg_mediator_role_select",
-              "👮 Selecionar cargo de Mediador"
-            )
-          ],
-          ephemeral: true
-        });
-
-        return;
-      }
-
-      // ------------------------------------------------------
-      // CONFIGURAÇÃO — CARGO ANALISTA
-      // ------------------------------------------------------
-
-      if (id === "cfg_analyst_role") {
-        await interaction.reply({
-          content:
-            "🔎 Escolha o cargo de Analista:",
-          components: [
-            roleSelect(
-              "cfg_analyst_role_select",
-              "🔎 Selecionar cargo de Analista"
-            )
-          ],
-          ephemeral: true
-        });
-
-        return;
-      }
-
-      // ------------------------------------------------------
-      // CONFIGURAÇÃO — ANÁLISE MOBILE
-      // ------------------------------------------------------
-
-      if (id === "cfg_mobile_analysis") {
-        await interaction.reply({
-          content:
-            "📱 Escolha o canal de análise Mobile:",
-          components: [
-            channelSelect(
-              "cfg_mobile_analysis_select",
-              "📱 Selecionar canal"
-            )
-          ],
-          ephemeral: true
-        });
-
-        return;
-      }
-
-      // ------------------------------------------------------
-      // CONFIGURAÇÃO — ANÁLISE EMULADOR
-      // ------------------------------------------------------
-
-      if (id === "cfg_emulator_analysis") {
-        await interaction.reply({
-          content:
-            "🖥️ Escolha o canal de análise Emulador:",
-          components: [
-            channelSelect(
-              "cfg_emulator_analysis_select",
-              "🖥️ Selecionar canal"
-            )
-          ],
-          ephemeral: true
-        });
-
-        return;
-      }
-
-      // ------------------------------------------------------
-      // CONFIGURAÇÃO — TAXA
-      // ------------------------------------------------------
-
-      if (id === "cfg_fee_button") {
-        await interaction.showModal(
-          feeModal()
-        );
-
-        return;
-      }
-
-      // ------------------------------------------------------
-      // CONFIGURAÇÃO — MEDIADORES
-      // ------------------------------------------------------
-
-      if (id === "cfg_mediators") {
-        await interaction.reply({
-          embeds: [
-            mediatorsListEmbed(
-              interaction.guild.id
-            )
-          ],
-          components: mediatorConfigButtons(),
-          ephemeral: true
-        });
-
-        return;
-      }
-
-      // ------------------------------------------------------
-      // ADICIONAR MEDIADOR
-      // ------------------------------------------------------
-
-      if (id === "cfg_add_mediator") {
-        await addMediatorId(
-          interaction
-        );
-
-        return;
-      }
-
-      // ------------------------------------------------------
-      // REMOVER MEDIADOR
-      // ------------------------------------------------------
-
-      if (id === "cfg_remove_mediator") {
-        await removeMediator(
-          interaction
-        );
-
-        return;
-      }
-
-      // ------------------------------------------------------
-      // LISTAR MEDIADORES
-      // ------------------------------------------------------
-
-      if (id === "cfg_list_mediators") {
-        await interaction.reply({
-          embeds: [
-            mediatorsListEmbed(
-              interaction.guild.id
-            )
-          ],
-          ephemeral: true
-        });
-
-        return;
-      }
-
-      return;
-    }
-
-    // ========================================================
-    // SELECT MENUS
-    // ========================================================
-
-    if (
-      interaction.isStringSelectMenu() ||
-      interaction.isChannelSelectMenu() ||
-      interaction.isRoleSelectMenu()
-    ) {
-      const id = interaction.customId;
-
-      // ------------------------------------------------------
-      // /FILA — FORMATO
-      // ------------------------------------------------------
-
-      if (id === "fila_format") {
-        await handleFilaFormat(
-          interaction
-        );
-
-        return;
-      }
-
-      // ------------------------------------------------------
-      // /FILA — MODALIDADE
-      // ------------------------------------------------------
-
-      if (id === "fila_modality") {
-        await handleFilaModality(
-          interaction
-        );
-
-        return;
-      }
-
-      // ------------------------------------------------------
-      // /FILA — CANAL
-      // ------------------------------------------------------
-
-      if (id === "fila_channel") {
-        await handleFilaChannel(
-          interaction
-        );
-
-        return;
-      }
-
-      // ------------------------------------------------------
-      // CONFIGURAÇÃO — CANAIS
-      // ------------------------------------------------------
-
-      if (
-        id === "cfg_mobile_select" ||
-        id === "cfg_emulator_select" ||
-        id === "cfg_category_select" ||
-        id === "cfg_mobile_analysis_select" ||
-        id === "cfg_emulator_analysis_select"
-      ) {
-        await handleConfigChannelSelect(
-          interaction
-        );
-
-        return;
-      }
-
-      // ------------------------------------------------------
-      // CONFIGURAÇÃO — CARGOS
-      // ------------------------------------------------------
-
-      if (
-        id === "cfg_mediator_role_select" ||
-        id === "cfg_analyst_role_select"
-      ) {
-        await handleConfigRoleSelect(
-          interaction
-        );
-
-        return;
-      }
-
-      // ------------------------------------------------------
-      // REMOVER MEDIADOR
-      // ------------------------------------------------------
-
-      if (id === "cfg_remove_mediator_select") {
-        await processRemoveMediator(
-          interaction
-        );
-
-        return;
-      }
-
-      return;
-    }
-
-    // ========================================================
-    // MODAIS
-    // ========================================================
-
-    if (interaction.isModalSubmit()) {
-      const id = interaction.customId;
-
-      // ------------------------------------------------------
-      // ID DO MEDIADOR
-      // ------------------------------------------------------
-
-      if (id === "cfg_med_id") {
-        await processMediatorId(
-          interaction
-        );
-
-        return;
-      }
-
-      // ------------------------------------------------------
-      // DADOS DO MEDIADOR
-      // ------------------------------------------------------
-
-      if (id.startsWith("cfg_med_data|")) {
-        await processMediatorData(
-          interaction
-        );
-
-        return;
-      }
-
-      // ------------------------------------------------------
-      // TAXA
-      // ------------------------------------------------------
-
-      if (id === "cfg_fee") {
-        await processFee(
-          interaction
-        );
-
-        return;
-      }
-
-      // ------------------------------------------------------
-      // SALA
-      // ------------------------------------------------------
-
-      if (id.startsWith("room_modal|")) {
-        const betId =
-          id.split("|")[1];
-
-        const bet = getBet(betId);
-
-        if (!bet) {
+        // ------------------------------------------------------
+        // CANAL EMULADOR
+        // ------------------------------------------------------
+
+        if (
+          id === "cfg_emulator"
+        ) {
           await interaction.reply({
             content:
-              "❌ Aposta não encontrada.",
+              "🖥️ Escolha o canal Emulador:",
+            components: [
+              channelSelect(
+                "cfg_emulator_select",
+                "🖥️ Selecionar canal Emulador"
+              )
+            ],
             ephemeral: true
           });
+
           return;
         }
 
-        await processRoomModal(
-          interaction,
-          bet
-        );
+        // ------------------------------------------------------
+        // CATEGORIA
+        // ------------------------------------------------------
 
-        return;
-      }
-
-      // ------------------------------------------------------
-      // VENCEDOR
-      // ------------------------------------------------------
-
-      if (id.startsWith("winner_modal|")) {
-        const betId =
-          id.split("|")[1];
-
-        const bet = getBet(betId);
-
-        if (!bet) {
+        if (
+          id === "cfg_category"
+        ) {
           await interaction.reply({
             content:
-              "❌ Aposta não encontrada.",
+              "📁 Escolha a categoria das apostas:",
+            components: [
+              channelSelect(
+                "cfg_category_select",
+                "📁 Selecionar categoria"
+              )
+            ],
             ephemeral: true
           });
+
           return;
         }
 
-        await processWinnerModal(
-          interaction,
-          bet
-        );
+        // ------------------------------------------------------
+        // CARGO MEDIADOR
+        // ------------------------------------------------------
+
+        if (
+          id === "cfg_mediator_role"
+        ) {
+          await interaction.reply({
+            content:
+              "👮 Escolha o cargo de Mediador:",
+            components: [
+              roleSelect(
+                "cfg_mediator_role_select",
+                "👮 Selecionar cargo de Mediador"
+              )
+            ],
+            ephemeral: true
+          });
+
+          return;
+        }
+
+        // ------------------------------------------------------
+        // CARGO ANALISTA
+        // ------------------------------------------------------
+
+        if (
+          id === "cfg_analyst_role"
+        ) {
+          await interaction.reply({
+            content:
+              "🔎 Escolha o cargo de Analista:",
+            components: [
+              roleSelect(
+                "cfg_analyst_role_select",
+                "🔎 Selecionar cargo de Analista"
+              )
+            ],
+            ephemeral: true
+          });
+
+          return;
+        }
+
+        // ------------------------------------------------------
+        // ANÁLISE MOBILE
+        // ------------------------------------------------------
+
+        if (
+          id === "cfg_mobile_analysis"
+        ) {
+          await interaction.reply({
+            content:
+              "📱 Escolha o canal de análise Mobile:",
+            components: [
+              channelSelect(
+                "cfg_mobile_analysis_select",
+                "📱 Selecionar canal"
+              )
+            ],
+            ephemeral: true
+          });
+
+          return;
+        }
+
+        // ------------------------------------------------------
+        // ANÁLISE EMULADOR
+        // ------------------------------------------------------
+
+        if (
+          id === "cfg_emulator_analysis"
+        ) {
+          await interaction.reply({
+            content:
+              "🖥️ Escolha o canal de análise Emulador:",
+            components: [
+              channelSelect(
+                "cfg_emulator_analysis_select",
+                "🖥️ Selecionar canal"
+              )
+            ],
+            ephemeral: true
+          });
+
+          return;
+        }
+
+        // ------------------------------------------------------
+        // TAXA
+        // ------------------------------------------------------
+
+        if (
+          id === "cfg_fee_button"
+        ) {
+          await interaction.showModal(
+            feeModal()
+          );
+
+          return;
+        }
+
+        // ------------------------------------------------------
+        // MEDIADORES
+        // ------------------------------------------------------
+
+        if (
+          id === "cfg_mediators"
+        ) {
+          await interaction.reply({
+            embeds: [
+              mediatorsListEmbed(
+                interaction.guild.id
+              )
+            ],
+            components:
+              mediatorConfigButtons(),
+            ephemeral: true
+          });
+
+          return;
+        }
+
+        // ------------------------------------------------------
+        // ADICIONAR MEDIADOR
+        // ------------------------------------------------------
+
+        if (
+          id === "cfg_add_mediator"
+        ) {
+          await addMediatorId(
+            interaction
+          );
+
+          return;
+        }
+
+        // ------------------------------------------------------
+        // REMOVER MEDIADOR
+        // ------------------------------------------------------
+
+        if (
+          id === "cfg_remove_mediator"
+        ) {
+          await removeMediator(
+            interaction
+          );
+
+          return;
+        }
+
+        // ------------------------------------------------------
+        // LISTAR MEDIADORES
+        // ------------------------------------------------------
+
+        if (
+          id === "cfg_list_mediators"
+        ) {
+          await interaction.reply({
+            embeds: [
+              mediatorsListEmbed(
+                interaction.guild.id
+              )
+            ],
+            ephemeral: true
+          });
+
+          return;
+        }
+
+        // ------------------------------------------------------
+        // APARÊNCIA
+        // ------------------------------------------------------
+
+        if (
+          id === "cfg_appearance"
+        ) {
+          await interaction.reply({
+            content:
+              "🎨 Escolha o que deseja alterar:",
+            components:
+              appearanceButtons(),
+            ephemeral: true
+          });
+
+          return;
+        }
+
+        // ------------------------------------------------------
+        // COR
+        // ------------------------------------------------------
+
+        if (
+          id === "cfg_color_button"
+        ) {
+          await interaction.showModal(
+            colorModal()
+          );
+
+          return;
+        }
+
+        // ------------------------------------------------------
+        // AVATAR
+        // ------------------------------------------------------
+
+        if (
+          id === "cfg_avatar_button"
+        ) {
+          await interaction.showModal(
+            avatarModal()
+          );
+
+          return;
+        }
 
         return;
       }
-    }
-  } catch (error) {
-    console.error(
-      "❌ Erro ao processar interação:",
-      error
-    );
 
-    try {
-      if (interaction.replied || interaction.deferred) {
-        await interaction.followUp({
-          content:
-            "❌ Ocorreu um erro ao processar essa ação.",
-          ephemeral: true
-        });
-      } else {
-        await interaction.reply({
-          content:
-            "❌ Ocorreu um erro ao processar essa ação.",
-          ephemeral: true
-        });
+      // ========================================================
+      // SELECT MENUS
+      // ========================================================
+
+      if (
+        interaction.isStringSelectMenu() ||
+        interaction.isChannelSelectMenu() ||
+        interaction.isRoleSelectMenu()
+      ) {
+        const id =
+          interaction.customId;
+
+        // ------------------------------------------------------
+        // /FILA — FORMATO
+        // ------------------------------------------------------
+
+        if (
+          id === "fila_format"
+        ) {
+          await handleFilaFormat(
+            interaction
+          );
+          return;
+        }
+
+        // ------------------------------------------------------
+        // /FILA — MODALIDADE
+        // ------------------------------------------------------
+
+        if (
+          id === "fila_modality"
+        ) {
+          await handleFilaModality(
+            interaction
+          );
+          return;
+        }
+
+        // ------------------------------------------------------
+        // /FILA — CANAL
+        // ------------------------------------------------------
+
+        if (
+          id === "fila_channel"
+        ) {
+          await handleFilaChannel(
+            interaction
+          );
+          return;
+        }
+
+        // ------------------------------------------------------
+        // CONFIG — CANAIS
+        // ------------------------------------------------------
+
+        if (
+          id === "cfg_mobile_select" ||
+          id === "cfg_emulator_select" ||
+          id === "cfg_category_select" ||
+          id === "cfg_mobile_analysis_select" ||
+          id === "cfg_emulator_analysis_select"
+        ) {
+          await handleConfigChannelSelect(
+            interaction
+          );
+          return;
+        }
+
+        // ------------------------------------------------------
+        // CONFIG — CARGOS
+        // ------------------------------------------------------
+
+        if (
+          id === "cfg_mediator_role_select" ||
+          id === "cfg_analyst_role_select"
+        ) {
+          await handleConfigRoleSelect(
+            interaction
+          );
+          return;
+        }
+
+        // ------------------------------------------------------
+        // REMOVER MEDIADOR
+        // ------------------------------------------------------
+
+        if (
+          id ===
+          "cfg_remove_mediator_select"
+        ) {
+          await processRemoveMediator(
+            interaction
+          );
+          return;
+        }
+
+        return;
       }
-    } catch {}
+
+      // ========================================================
+      // MODAIS
+      // ========================================================
+
+      if (
+        interaction.isModalSubmit()
+      ) {
+        const id =
+          interaction.customId;
+
+        // ------------------------------------------------------
+        // ID DO MEDIADOR
+        // ------------------------------------------------------
+
+        if (
+          id === "cfg_med_id"
+        ) {
+          await processMediatorId(
+            interaction
+          );
+          return;
+        }
+
+        // ------------------------------------------------------
+        // DADOS DO MEDIADOR
+        // ------------------------------------------------------
+
+        if (
+          id.startsWith(
+            "cfg_med_data|"
+          )
+        ) {
+          await processMediatorData(
+            interaction
+          );
+          return;
+        }
+
+        // ------------------------------------------------------
+        // TAXA
+        // ------------------------------------------------------
+
+        if (
+          id === "cfg_fee"
+        ) {
+          await processFee(
+            interaction
+          );
+          return;
+        }
+
+        // ------------------------------------------------------
+        // COR
+        // ------------------------------------------------------
+
+        if (
+          id === "cfg_color"
+        ) {
+          await processColor(
+            interaction
+          );
+          return;
+        }
+
+        // ------------------------------------------------------
+        // AVATAR
+        // ------------------------------------------------------
+
+        if (
+          id === "cfg_avatar"
+        ) {
+          await processAvatar(
+            interaction
+          );
+          return;
+        }
+
+        // ------------------------------------------------------
+        // SALA
+        // ------------------------------------------------------
+
+        if (
+          id.startsWith(
+            "room_modal|"
+          )
+        ) {
+          const betId =
+            id.split("|")[1];
+
+          const bet =
+            getBet(betId);
+
+          if (!bet) {
+            await interaction.reply({
+              content:
+                "❌ Aposta não encontrada.",
+              ephemeral: true
+            });
+            return;
+          }
+
+          await processRoomModal(
+            interaction,
+            bet
+          );
+
+          return;
+        }
+
+        // ------------------------------------------------------
+        // VENCEDOR
+        // ------------------------------------------------------
+
+        if (
+          id.startsWith(
+            "winner_modal|"
+          )
+        ) {
+          const betId =
+            id.split("|")[1];
+
+          const bet =
+            getBet(betId);
+
+          if (!bet) {
+            await interaction.reply({
+              content:
+                "❌ Aposta não encontrada.",
+              ephemeral: true
+            });
+            return;
+          }
+
+          await processWinnerModal(
+            interaction,
+            bet
+          );
+
+          return;
+        }
+      }
+    } catch (error) {
+      console.error(
+        "❌ Erro ao processar interação:",
+        error
+      );
+
+      try {
+        if (
+          interaction.replied ||
+          interaction.deferred
+        ) {
+          await interaction.followUp({
+            content:
+              "❌ Ocorreu um erro ao processar essa ação.",
+            ephemeral: true
+          });
+        } else {
+          await interaction.reply({
+            content:
+              "❌ Ocorreu um erro ao processar essa ação.",
+            ephemeral: true
+          });
+        }
+      } catch {}
+    }
   }
-});
+);
 
 // ============================================================
 // COMANDOS COM PREFIXO "."
@@ -3309,7 +5072,9 @@ client.on(
       if (
         message.author.bot ||
         !message.guild ||
-        !message.content.startsWith(PREFIX)
+        !message.content.startsWith(
+          PREFIX
+        )
       ) {
         return;
       }
@@ -3321,19 +5086,24 @@ client.on(
           .split(/\s+/);
 
       const command =
-        (args.shift() || "").toLowerCase();
+        (
+          args.shift() || ""
+        ).toLowerCase();
 
-      if (!command) return;
+      if (!command) {
+        return;
+      }
 
       // ------------------------------------------------------
       // .P
       // ------------------------------------------------------
 
-      if (command === "p") {
+      if (
+        command === "p"
+      ) {
         await handlePlayerStats(
           message
         );
-
         return;
       }
 
@@ -3341,11 +5111,12 @@ client.on(
       // .MED
       // ------------------------------------------------------
 
-      if (command === "med") {
+      if (
+        command === "med"
+      ) {
         await handleDotMed(
           message
         );
-
         return;
       }
 
@@ -3353,12 +5124,13 @@ client.on(
       // .SSMOB
       // ------------------------------------------------------
 
-      if (command === "ssmob") {
+      if (
+        command === "ssmob"
+      ) {
         await requestAnalysis(
           message,
           "mobile"
         );
-
         return;
       }
 
@@ -3366,22 +5138,23 @@ client.on(
       // .SSEMU
       // ------------------------------------------------------
 
-      if (command === "ssemu") {
+      if (
+        command === "ssemu"
+      ) {
         await requestAnalysis(
           message,
           "emulador"
         );
-
         return;
       }
 
       // ------------------------------------------------------
       // .WO
       // ------------------------------------------------------
-      // Usado somente quando o painel de W.O. solicitar.
-      // Não é um comando público/documentado do bot.
 
-      if (command === "wo") {
+      if (
+        command === "wo"
+      ) {
         const bet =
           findBetByChannel(
             message.channel.id
@@ -3406,12 +5179,41 @@ client.on(
           return;
         }
 
+        if (
+          bet.resultRecorded
+        ) {
+          await message.reply(
+            "❌ O resultado desta aposta já foi registrado."
+          );
+          return;
+        }
+
+        if (
+          bet.mediatorId &&
+          bet.mediatorId !==
+            message.author.id
+        ) {
+          await message.reply(
+            `❌ O mediador desta aposta é <@${bet.mediatorId}>.`
+          );
+          return;
+        }
+
         const winnerId =
-          args[0];
+          (
+            args[0] || ""
+          )
+            .trim()
+            .replace(
+              /[<@!>]/g,
+              ""
+            );
 
         if (
           !winnerId ||
-          !bet.players.includes(winnerId)
+          !bet.players.includes(
+            winnerId
+          )
         ) {
           await message.reply(
             "❌ Informe o ID de um dos jogadores da aposta."
@@ -3424,9 +5226,24 @@ client.on(
             id => id !== winnerId
           );
 
-        bet.winnerId = winnerId;
-        bet.mediatorId = message.author.id;
-        bet.status = "wo";
+        if (!loserId) {
+          await message.reply(
+            "❌ Não foi possível identificar o perdedor."
+          );
+          return;
+        }
+
+        bet.winnerId =
+          winnerId;
+
+        bet.mediatorId =
+          message.author.id;
+
+        bet.status =
+          "wo";
+
+        bet.resultRecorded =
+          true;
 
         registerBetResult(
           message.guild.id,
@@ -3438,19 +5255,27 @@ client.on(
 
         saveDatabase();
 
+        const embed =
+          new EmbedBuilder()
+            .setTitle(
+              "⚠️ VITÓRIA POR W.O."
+            )
+            .setDescription(
+              [
+                `🏆 Vencedor: <@${winnerId}>`,
+                `❌ Perdedor: <@${loserId}>`,
+                "",
+                `💰 Valor: ${moneyBRL(bet.value)}`
+              ].join("\n")
+            );
+
+        applyGuildColor(
+          embed,
+          bet.guildId
+        );
+
         await message.reply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("⚠️ VITÓRIA POR W.O.")
-              .setDescription(
-                [
-                  `🏆 Vencedor: <@${winnerId}>`,
-                  `❌ Perdedor: <@${loserId}>`,
-                  "",
-                  `💰 Valor: ${moneyBRL(bet.value)}`
-                ].join("\n")
-              )
-          ]
+          embeds: [embed]
         });
 
         return;
@@ -3460,6 +5285,10 @@ client.on(
         "❌ Erro no comando de prefixo:",
         error
       );
+
+      await message.reply(
+        "❌ Ocorreu um erro ao executar o comando."
+      ).catch(() => {});
     }
   }
 );
@@ -3488,3 +5317,4 @@ client.once(
 // ============================================================
 
 client.login(TOKEN);
+```
