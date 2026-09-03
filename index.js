@@ -3188,7 +3188,7 @@ function cadastroComponents() {
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId(
-          "mediator_add"
+          "cadastro_mediator_add"
         )
         .setLabel(
           "Cadastrar Mediador"
@@ -3202,7 +3202,7 @@ function cadastroComponents() {
 
       new ButtonBuilder()
         .setCustomId(
-          "mediator_remove"
+          "cadastro_mediator_remove"
         )
         .setLabel(
           "Remover Mediador"
@@ -3216,7 +3216,7 @@ function cadastroComponents() {
 
       new ButtonBuilder()
         .setCustomId(
-          "mediator_list"
+          "cadastro_mediator_list"
         )
         .setLabel(
           "Lista de Mediadores"
@@ -3232,7 +3232,7 @@ function cadastroComponents() {
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId(
-          "pix_add"
+          "cadastro_pix_add"
         )
         .setLabel(
           "Cadastrar ADM/Pix"
@@ -3246,7 +3246,7 @@ function cadastroComponents() {
 
       new ButtonBuilder()
         .setCustomId(
-          "pix_list"
+          "cadastro_pix_list"
         )
         .setLabel(
           "Lista ADM/Pix"
@@ -3546,184 +3546,9 @@ function appearanceComponents() {
         )
     ),
   ];
+}
 
-    if (
-      !config.mediatorQueue.includes(
-        userId
-      )
-    ) {
-      config.mediatorQueue.push(
-        userId
-      );
-
-      saveDatabase();
-    }
-
-    await updateMediatorQueueMessage(
-      interaction.guild
-    );
-
-    return sendSafeReply(
-      interaction,
-      {
-        content:
-          "✅ Você entrou na fila de mediadores.",
-        ephemeral: true,
-      }
-    );
-  }
-
-  if (
-    id ===
-    "mediator_leave"
-  ) {
-    const userId =
-      interaction.user.id;
-
-    const config =
-      ensureMediatorConfig(
-        interaction.guild.id
-      );
-
-    config.mediatorQueue =
-      config.mediatorQueue.filter(
-        id =>
-          id !== userId
-      );
-
-    if (
-      config.mediatorRotationIndex >=
-      config.mediatorQueue.length
-    ) {
-      config.mediatorRotationIndex =
-        0;
-    }
-
-    saveDatabase();
-
-    await updateMediatorQueueMessage(
-      interaction.guild
-    );
-
-    return sendSafeReply(
-      interaction,
-      {
-        content:
-          "✅ Você saiu da fila de mediadores.",
-        ephemeral: true,
-      }
-    );
-  }
-
-  if (
-    id ===
-    "mediator_next"
-  ) {
-    if (
-      !isAdministrator(
-        interaction.member
-      ) &&
-      !hasMediatorRole(
-        interaction.member,
-        interaction.guild.id
-      )
-    ) {
-      return sendSafeReply(
-        interaction,
-        {
-          content:
-            "❌ Você não possui permissão para avançar a fila.",
-          ephemeral: true,
-        }
-      );
-    }
-
-    const config =
-      ensureMediatorConfig(
-        interaction.guild.id
-      );
-
-    if (
-      config.mediatorQueue.length ===
-      0
-    ) {
-      return sendSafeReply(
-        interaction,
-        {
-          content:
-            "❌ Não há mediadores na fila.",
-          ephemeral: true,
-        }
-      );
-    }
-
-    config.mediatorRotationIndex =
-      (
-        config.mediatorRotationIndex +
-        1
-      ) %
-      config.mediatorQueue.length;
-
-    saveDatabase();
-
-    await updateMediatorQueueMessage(
-      interaction.guild
-    );
-
-    return sendSafeReply(
-      interaction,
-      {
-        content:
-          `🔄 Próximo mediador: <@${getCurrentMediator(
-            interaction.guild.id
-          )}>`,
-        ephemeral: true,
-      }
-    );
-  }
-
-  if (
-    id.startsWith(
-      "queue_join|"
-    )
-  ) {
-    return handleQueueJoin(
-      interaction
-    );
-  }
-
-  if (
-    id.startsWith(
-      "queue_leave|"
-    )
-  ) {
-    return handleQueueLeave(
-      interaction
-    );
-  }
-
-  if (
-    id.startsWith(
-      "bet_ready|"
-    )
-  ) {
-    return handleBetReady(
-      interaction
-    );
-  }
-
-  if (
-    id.startsWith(
-      "bet_cancel|"
-    )
-  ) {
-    return handleBetCancel(
-      interaction
-    );
-  }
-
-  return null;
-}async function handleQueueJoin(
+async function handleQueueJoin(
   interaction
 ) {
   const parts =
@@ -3756,6 +3581,51 @@ function appearanceComponents() {
     );
   }
 
+  if (
+    !FORMATS.includes(
+      format
+    )
+  ) {
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          "❌ Formato de fila inválido.",
+        ephemeral: true,
+      }
+    );
+  }
+
+  if (
+    !MODES.includes(
+      mode
+    )
+  ) {
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          "❌ Modalidade de fila inválida.",
+        ephemeral: true,
+      }
+    );
+  }
+
+  if (
+    !VALUES.includes(
+      value
+    )
+  ) {
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          "❌ Valor de fila inválido.",
+        ephemeral: true,
+      }
+    );
+  }
+
   const queue =
     getQueue(
       interaction.guild.id,
@@ -3769,7 +3639,9 @@ function appearanceComponents() {
     interaction.user.id;
 
   if (
-    queue.includes(userId)
+    queue.includes(
+      userId
+    )
   ) {
     return sendSafeReply(
       interaction,
@@ -3801,7 +3673,8 @@ function appearanceComponents() {
   }
 
   if (
-    format === "1x1"
+    format ===
+    "1x1"
   ) {
     const choice =
       type ===
@@ -3846,7 +3719,9 @@ function appearanceComponents() {
       queueKey
     ];
 
-  if (messageId) {
+  if (
+    messageId
+  ) {
     for (
       const channel of
       interaction.guild.channels.cache.values()
@@ -3863,7 +3738,9 @@ function appearanceComponents() {
             messageId
           );
 
-        if (message) {
+        if (
+          message
+        ) {
           await message.edit({
             embeds: [
               queueEmbed(
@@ -3921,7 +3798,7 @@ function appearanceComponents() {
 
     saveDatabase();
 
-    let mediatorId =
+    const mediatorId =
       getCurrentMediator(
         interaction.guild.id
       );
@@ -3945,7 +3822,9 @@ function appearanceComponents() {
           ephemeral: true,
         }
       );
-    } catch (error) {
+    } catch (
+      error
+    ) {
       /*
        * Se a criação da aposta falhar,
        * devolve os jogadores para a fila.
@@ -4008,6 +3887,23 @@ async function handleQueueLeave(
   const type =
     parts[4] || "normal";
 
+  if (
+    !format ||
+    !mode ||
+    !Number.isFinite(
+      value
+    )
+  ) {
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          "❌ Dados da fila inválidos.",
+        ephemeral: true,
+      }
+    );
+  }
+
   const queue =
     getQueue(
       interaction.guild.id,
@@ -4026,7 +3922,8 @@ async function handleQueueLeave(
     );
 
   if (
-    index === -1
+    index ===
+    -1
   ) {
     return sendSafeReply(
       interaction,
@@ -4039,120 +3936,6 @@ async function handleQueueLeave(
   }
 
   queue.splice(
-    index,
-    1
-  );
-
-  if (
-    format === "1x1"
-  ) {
-    const choices =
-      getQueueChoices(
-        interaction.guild.id,
-        format,
-        mode,
-        value
-      );
-
-    delete choices[
-      userId
-    ];
-  }
-
-  saveDatabase();
-
-  const config =
-    getGuildConfig(
-      interaction.guild.id
-    );
-
-  const queueKey =
-    makeQueueKey(
-      interaction.guild.id,
-      format,
-      mode,
-      value,
-      type
-    );
-
-  const messageId =
-    config.queueMessages?.[
-      queueKey
-    ];
-
-  if (messageId) {
-    for (
-      const channel of
-      interaction.guild.channels.cache.values()
-    ) {
-      if (
-        !channel.isTextBased()
-      ) {
-        continue;
-      }
-
-      try {
-        const message =
-          await channel.messages.fetch(
-            messageId
-          );
-
-        if (message) {
-          await message.edit({
-            embeds: [
-              queueEmbed(
-                interaction.guild.id,
-                format,
-                mode,
-                value,
-                type
-              ),
-            ],
-            components:
-              queueButtons(
-                format,
-                mode,
-                value,
-                type
-              ),
-          });
-
-          break;
-        }
-      } catch {
-        // Continua procurando.
-      }
-    }
-  }
-
-  return sendSafeReply(
-    interaction,
-    {
-      content:
-        "✅ Você saiu da fila.",
-      ephemeral: true,
-    }
-  );
-}  queue.splice(
-    index,
-    1
-  );
-
-  if (
-    format === "1x1"
-  ) {
-    const choices =
-      getQueueChoices(
-        interaction.guild.id,
-        format,
-        mode,
-        value
-      );
-
-    delete choices[
-      userId
-    ];
-  }  queue.splice(
     index,
     1
   );
@@ -4195,7 +3978,9 @@ async function handleQueueLeave(
       queueKey
     ];
 
-  if (messageId) {
+  if (
+    messageId
+  ) {
     for (
       const channel of
       interaction.guild.channels.cache.values()
@@ -4212,7 +3997,9 @@ async function handleQueueLeave(
             messageId
           );
 
-        if (message) {
+        if (
+          message
+        ) {
           await message.edit({
             embeds: [
               queueEmbed(
@@ -4703,6 +4490,21 @@ async function handleStringSelect(
     id ===
     "queue_setup_format"
   ) {
+    if (
+      !FORMATS.includes(
+        value
+      )
+    ) {
+      return sendSafeReply(
+        interaction,
+        {
+          content:
+            "❌ Formato inválido.",
+          ephemeral: true,
+        }
+      );
+    }
+
     interaction.client.queueSetup =
       interaction.client.queueSetup ||
       {};
@@ -4733,6 +4535,21 @@ async function handleStringSelect(
     id ===
     "queue_setup_mode"
   ) {
+    if (
+      !MODES.includes(
+        value
+      )
+    ) {
+      return sendSafeReply(
+        interaction,
+        {
+          content:
+            "❌ Modalidade inválida.",
+          ephemeral: true,
+        }
+      );
+    }
+
     interaction.client.queueSetup =
       interaction.client.queueSetup ||
       {};
@@ -4765,6 +4582,27 @@ async function handleStringSelect(
     id ===
     "queue_setup_value"
   ) {
+    const selectedValue =
+      Number(value);
+
+    if (
+      !Number.isFinite(
+        selectedValue
+      ) ||
+      !VALUES.includes(
+        selectedValue
+      )
+    ) {
+      return sendSafeReply(
+        interaction,
+        {
+          content:
+            "❌ Valor inválido.",
+          ephemeral: true,
+        }
+      );
+    }
+
     interaction.client.queueSetup =
       interaction.client.queueSetup ||
       {};
@@ -4779,14 +4617,14 @@ async function handleStringSelect(
     interaction.client.queueSetup[
       interaction.user.id
     ].value =
-      Number(value);
+      selectedValue;
 
     return sendSafeReply(
       interaction,
       {
         content:
           `✅ Valor selecionado: **${formatMoney(
-            Number(value)
+            selectedValue
           )}**.`,
         ephemeral: true,
       }
@@ -4835,16 +4673,83 @@ async function handleQueueSetupChannel(
     );
   }
 
+  if (
+    !FORMATS.includes(
+      setup.format
+    )
+  ) {
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          "❌ Formato inválido.",
+        ephemeral: true,
+      }
+    );
+  }
+
+  if (
+    !MODES.includes(
+      setup.mode
+    )
+  ) {
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          "❌ Modalidade inválida.",
+        ephemeral: true,
+      }
+    );
+  }
+
+  if (
+    !VALUES.includes(
+      setup.value
+    )
+  ) {
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          "❌ Valor inválido.",
+        ephemeral: true,
+      }
+    );
+  }
+
+  const targetChannel =
+    interaction.guild.channels.cache.get(
+      channelId
+    );
+
+  if (
+    !targetChannel ||
+    targetChannel.type !==
+      ChannelType.GuildText
+  ) {
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          "❌ O canal selecionado não é um canal de texto válido.",
+        ephemeral: true,
+      }
+    );
+  }
+
   try {
     await registerQueueMessage(
-      interaction.guild.channels.cache.get(
-        channelId
-      ),
+      targetChannel,
       interaction.guild.id,
       setup.format,
       setup.mode,
       setup.value
     );
+
+    delete interaction.client.queueSetup[
+      interaction.user.id
+    ];
 
     return sendSafeReply(
       interaction,
@@ -4856,7 +4761,9 @@ async function handleQueueSetupChannel(
         ephemeral: true,
       }
     );
-  } catch (error) {
+  } catch (
+    error
+  ) {
     return sendSafeReply(
       interaction,
       {
@@ -5034,7 +4941,9 @@ async function registerCommands() {
     console.log(
       "Comandos registrados com sucesso."
     );
-  } catch (error) {
+  } catch (
+    error
+  ) {
     console.error(
       "Erro ao registrar comandos:",
       error
@@ -5068,7 +4977,9 @@ client.once(
           config.botAvatar
         );
       }
-    } catch (error) {
+    } catch (
+      error
+    ) {
       console.error(
         "Não foi possível restaurar o avatar:",
         error
@@ -5085,12 +4996,16 @@ client.once(
           GUILD_ID
         );
 
-      if (guild) {
+      if (
+        guild
+      ) {
         await updateMediatorQueueMessage(
           guild
         );
       }
-    } catch (error) {
+    } catch (
+      error
+    ) {
       console.error(
         "Erro ao restaurar fila de mediadores:",
         error
@@ -5152,7 +5067,10 @@ client.on(
         ) {
           await handleQueueSetupChannel(
             interaction
-          );        }
+          );
+
+          return;
+        }
 
         await handleChannelSelect(
           interaction
@@ -5170,7 +5088,9 @@ client.on(
 
         return;
       }
-    } catch (error) {
+    } catch (
+      error
+    ) {
       console.error(
         "Erro ao processar interação:",
         error
@@ -5329,7 +5249,9 @@ client.on(
             mediatorConfigComponents(),
         });
       }
-    } catch (error) {
+    } catch (
+      error
+    ) {
       console.error(
         "Erro ao processar mensagem:",
         error
