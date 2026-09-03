@@ -2664,6 +2664,7 @@ function userInBet(
   );
 }
 
+```js
 // ============================================================
 // BET — ASSUMIR PELO MEDIADOR
 // ============================================================
@@ -2673,8 +2674,7 @@ async function handleBetAccept(
 ) {
   const parts =
     String(
-      interaction.customId ||
-        ""
+      interaction.customId || ""
     ).split("|");
 
   const betId =
@@ -2794,81 +2794,593 @@ async function handleBetAccept(
       ephemeral: true,
     }
   );
-}    queue.updatedAt = Date.now();
+}
+
+// ============================================================
+// FILA — ENTRAR
+// ============================================================
+
+async function handleQueueJoin(
+  interaction
+) {
+  const parts =
+    String(
+      interaction.customId || ""
+    ).split("|");
+
+  if (
+    parts.length < 5
+  ) {
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          "❌ Dados da fila inválidos.",
+        ephemeral: true,
+      }
+    );
+  }
+
+  const format =
+    parts[1];
+
+  const mode =
+    parts[2];
+
+  const value =
+    Number(
+      parts[3]
+    );
+
+  const type =
+    parts[4] ||
+    "normal";
+
+  if (
+    !Object.values(
+      FORMATS
+    ).includes(
+      format
+    )
+  ) {
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          "❌ Formato de fila inválido.",
+        ephemeral: true,
+      }
+    );
+  }
+
+  if (
+    !Object.keys(
+      MODES
+    ).includes(
+      mode
+    )
+  ) {
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          "❌ Modo de fila inválido.",
+        ephemeral: true,
+      }
+    );
+  }
+
+  if (
+    !VALUES.includes(
+      value
+    )
+  ) {
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          "❌ Valor da fila inválido.",
+        ephemeral: true,
+      }
+    );
+  }
+
+  if (
+    !Object.keys(
+      QUEUE_TYPES
+    ).includes(
+      type
+    )
+  ) {
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          "❌ Tipo de fila inválido.",
+        ephemeral: true,
+      }
+    );
+  }
+
+  const guildId =
+    getGuildId(
+      interaction
+    );
+
+  if (!guildId) {
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          "❌ Servidor não identificado.",
+        ephemeral: true,
+      }
+    );
+  }
+
+  const queueKey =
+    makeQueueKey(
+      guildId,
+      format,
+      mode,
+      value,
+      type
+    );
+
+  if (
+    client.queueLocks.has(
+      queueKey
+    )
+  ) {
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          "⏳ Aguarde, processando a fila...",
+        ephemeral: true,
+      }
+    );
+  }
+
+  client.queueLocks.add(
+    queueKey
+  );
+
+  try {
+    const queue =
+      getQueue(
+        guildId,
+        format,
+        mode,
+        value,
+        type
+      );
+
+    if (
+      userInQueue(
+        queue,
+        interaction.user.id
+      )
+    ) {
+      return sendSafeReply(
+        interaction,
+        {
+          content:
+            "⚠️ Você já está nessa fila.",
+          ephemeral: true,
+        }
+      );
+    }
+
+    if (
+      isQueueFull(
+        queue
+      )
+    ) {
+      return sendSafeReply(
+        interaction,
+        {
+          content:
+            "❌ Essa fila já está cheia.",
+          ephemeral: true,
+        }
+      );
+    }
+
+    queue.players.push(
+      {
+        userId:
+          interaction.user.id,
+
+        username:
+          interaction.user.username,
+
+        joinedAt:
+          Date.now(),
+      }
+    );
+
+    queue.updatedAt =
+      Date.now();
 
     saveConfig();
 
+    // Atualiza a mensagem da fila
     try {
-      await interaction.message.edit({
-        embeds: [queueEmbed(queue)],
-        components: queueButtons(queue),
-      });
-    } catch (error) {
+      await interaction.message.edit(
+        {
+          embeds: [
+            queueEmbed(
+              queue
+            ),
+          ],
+          components:
+            queueButtons(
+              queue
+            ),
+        }
+      );
+    } catch (
+      error
+    ) {
       console.error(
         "❌ Erro ao atualizar fila após entrada:",
         error
       );
     }
 
-    if (isQueueFull(queue)) {
-      const players = [...queue.players];
+    // Se a fila ficou completa,
+    // cria a aposta.
+    if (
+      isQueueFull(
+        queue
+      )
+    ) {
+      const players =
+        [...queue.players];
 
       try {
-        await createBetChannel(
-          interaction.guild,
-          queue,
-          players
-        );
+        const betResult =
+          await createBetChannel(
+            interaction.guild,
+            queue,
+            players
+          );
 
-        queue.players = [];
-        queue.updatedAt = Date.now();
+        /*
+         * Só limpa a fila depois
+         * que a aposta foi criada.
+         */
+        queue.players =
+          [];
+
+        queue.updatedAt =
+          Date.now();
 
         saveConfig();
 
+        // Atualiza a fila vazia
         try {
-          await interaction.message.edit({
-            embeds: [queueEmbed(queue)],
-            components: queueButtons(queue),
-          });
-        } catch (error) {
+          await interaction.message.edit(
+            {
+              embeds: [
+                queueEmbed(
+                  queue
+                ),
+              ],
+              components:
+                queueButtons(
+                  queue
+                ),
+            }
+          );
+        } catch (
+          error
+        ) {
           console.error(
             "❌ Erro ao limpar fila após criação da aposta:",
             error
           );
         }
 
-        await sendSafeReply(interaction, {
-          content:
-            "✅ Fila completa! O canal da aposta foi criado.",
-          ephemeral: true,
-        });
-      } catch (error) {
+        /*
+         * Se createBetChannel retornar
+         * uma aposta, registra no banco.
+         */
+        if (
+          betResult &&
+          betResult.bet
+        ) {
+          const bet =
+            betResult.bet;
+
+          config.bets[
+            bet.id
+          ] = bet;
+
+          saveConfig();
+
+          /*
+           * Envia a mensagem inicial
+           * da aposta quando possível.
+           */
+          if (
+            betResult.channel
+          ) {
+            try {
+              await sendBetCreatedMessage(
+                betResult.channel,
+                bet,
+                bet.mediatorId
+                  ? await fetchUser(
+                      bet.mediatorId
+                    )
+                  : null
+              );
+            } catch (
+              error
+            ) {
+              console.error(
+                "❌ Erro ao enviar mensagem inicial da aposta:",
+                error
+              );
+            }
+          }
+        }
+
+        return sendSafeReply(
+          interaction,
+          {
+            content:
+              "✅ Fila completa! O canal da aposta foi criado.",
+            ephemeral: true,
+          }
+        );
+      } catch (
+        error
+      ) {
+        /*
+         * Se falhar, devolve os jogadores
+         * para a fila.
+         */
+        queue.players =
+          players;
+
+        queue.updatedAt =
+          Date.now();
+
+        saveConfig();
+
         console.error(
           "❌ Erro ao criar canal da aposta:",
           error
         );
 
-        queue.players = players;
-        saveConfig();
-
-        await sendSafeReply(interaction, {
-          content:
-            "❌ Não foi possível criar o canal da aposta.",
-          ephemeral: true,
-        });
+        return sendSafeReply(
+          interaction,
+          {
+            content:
+              "❌ Não foi possível criar o canal da aposta. Os jogadores permaneceram na fila.",
+            ephemeral: true,
+          }
+        );
       }
-
-      return;
     }
 
-    await sendSafeReply(interaction, {
-      content: "✅ Você entrou na fila!",
-      ephemeral: true,
-    });
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          "✅ Você entrou na fila!",
+        ephemeral: true,
+      }
+    );
   } finally {
-    client.queueLocks.delete(queueKey);
+    client.queueLocks.delete(
+      queueKey
+    );
   }
 }
+
+// ============================================================
+// FILA — SAIR
+// ============================================================
+
+async function handleQueueLeave(
+  interaction
+) {
+  const parts =
+    String(
+      interaction.customId || ""
+    ).split("|");
+
+  if (
+    parts.length < 5
+  ) {
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          "❌ Dados da fila inválidos.",
+        ephemeral: true,
+      }
+    );
+  }
+
+  const format =
+    parts[1];
+
+  const mode =
+    parts[2];
+
+  const value =
+    Number(
+      parts[3]
+    );
+
+  const type =
+    parts[4] ||
+    "normal";
+
+  if (
+    !Object.values(
+      FORMATS
+    ).includes(
+      format
+    )
+  ) {
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          "❌ Formato da fila inválido.",
+        ephemeral: true,
+      }
+    );
+  }
+
+  if (
+    !Object.keys(
+      MODES
+    ).includes(
+      mode
+    )
+  ) {
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          "❌ Modo da fila inválido.",
+        ephemeral: true,
+      }
+    );
+  }
+
+  if (
+    !VALUES.includes(
+      value
+    )
+  ) {
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          "❌ Valor da fila inválido.",
+        ephemeral: true,
+      }
+    );
+  }
+
+  if (
+    !Object.keys(
+      QUEUE_TYPES
+    ).includes(
+      type
+    )
+  ) {
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          "❌ Tipo de fila inválido.",
+        ephemeral: true,
+      }
+    );
+  }
+
+  const guildId =
+    getGuildId(
+      interaction
+    );
+
+  if (!guildId) {
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          "❌ Servidor não identificado.",
+        ephemeral: true,
+      }
+    );
+  }
+
+  const queueKey =
+    makeQueueKey(
+      guildId,
+      format,
+      mode,
+      value,
+      type
+    );
+
+  if (
+    client.queueLocks.has(
+      queueKey
+    )
+  ) {
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          "⏳ Aguarde, processando a fila...",
+        ephemeral: true,
+      }
+    );
+  }
+
+  client.queueLocks.add(
+    queueKey
+  );
+
+  try {
+    const queue =
+      getQueue(
+        guildId,
+        format,
+        mode,
+        value,
+        type
+      );
+
+    const removed =
+      removeUserFromQueue(
+        queue,
+        interaction.user.id
+      );
+
+    if (!removed) {
+      return sendSafeReply(
+        interaction,
+        {
+          content:
+            "⚠️ Você não está nessa fila.",
+          ephemeral: true,
+        }
+      );
+    }
+
+    saveConfig();
+
+    await updateQueueMessage(
+      queue
+    );
+
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          "✅ Você saiu da fila com sucesso.",
+        ephemeral: true,
+      }
+    );
+  } finally {
+    client.queueLocks.delete(
+      queueKey
+    );
+  }
+}
+```
+
 
 // ============================================================
 // FILA — SAIR
