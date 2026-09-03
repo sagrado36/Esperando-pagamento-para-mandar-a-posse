@@ -2934,33 +2934,14 @@ client
 
 // ============================================================
 // FIM DA PARTE 1
-// ============================================================          
-          .setStyle(
-            TextInputStyle.Short
-          )
-          .setRequired(true)
-          .setMaxLength(200)
-      ),
+// ============================================================
 
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId(
-            "admin_pix_qr"
-          )
-          .setLabel(
-            "QR Code do Pix (opcional)"
-          )
-          .setPlaceholder(
-            "Link da imagem do QR Code"
-          )
-          .setStyle(
-            TextInputStyle.Short
-          )
-          .setRequired(false)
-          .setMaxLength(500)
-      )
-    );
-}
+function createFeeModal() {
+  return new ModalBuilder()
+    .setCustomId(
+      "fee_modal"
+    )
+    .setTitle(
 
 function createFeeModal() {
   return new ModalBuilder()
