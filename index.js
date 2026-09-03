@@ -1058,14 +1058,18 @@ function backButton() {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(
-        "config_back"
-      )
-      .setLabel(
-        "Voltar"
-      )
-      .setStyle(
-        ButtonStyle.Secondary
-      )
+        new ChannelSelectMenuBuilder()
+  .setCustomId(
+    "select_bets_category"
+  )
+  .setPlaceholder(
+    "Selecione a categoria das apostas"
+  )
+  .setChannelTypes(
+    ChannelType.GuildCategory
+  )
+  .setMinValues(1)
+  .setMaxValues(1)
   ];
 }
 
