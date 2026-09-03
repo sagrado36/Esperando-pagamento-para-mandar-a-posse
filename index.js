@@ -3546,14 +3546,6 @@ function appearanceComponents() {
         )
     ),
   ];
-}        interaction,
-        {
-          content:
-            "❌ Você não está cadastrado como mediador.",
-          ephemeral: true,
-        }
-      );
-    }
 
     if (
       !config.mediatorQueue.includes(
