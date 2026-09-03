@@ -2942,6 +2942,31 @@ function createFeeModal() {
       "fee_modal"
     )
     .setTitle(
+      "Configurar taxa do ADM"
+    )
+    .addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId(
+            "fee_cents"
+          )
+          .setLabel(
+            "Taxa em centavos"
+          )
+          .setPlaceholder(
+            "1 = R$0,01 | 100 = R$1,00"
+          )
+          .setStyle(
+            TextInputStyle.Short
+          )
+          .setRequired(true)
+          .setMinLength(1)
+          .setMaxLength(6)
+      )
+    );
+}
+
+function configButtons() {
 
 function createFeeModal() {
   return new ModalBuilder()
