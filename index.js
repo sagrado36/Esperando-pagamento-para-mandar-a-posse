@@ -904,10 +904,6 @@ async function registerCommands() {
       .setDescription("Solicita uma análise Emulador."),
 
     new SlashCommandBuilder()
-      .setName("med")
-      .setDescription("Mediador puxa e administra uma aposta."),
-
-    new SlashCommandBuilder()
       .setName("p")
       .setDescription("Mostra suas estatísticas.")
   ].map(command => command.toJSON());
@@ -1034,6 +1030,49 @@ client.on("messageCreate", async message => {
 
     if (command === ".ssemu") {
       await processAnalysis(message, "Emulador");
+    }
+
+    if (command === ".med") {
+      const bet = Object.values(db.bets).find(
+        item =>
+          item.guildId === message.guild.id &&
+          item.channelId === message.channel.id &&
+          item.status !== "finished"
+      );
+
+      if (!bet) {
+        return message.reply("❌ Este comando só pode ser usado no canal privado de uma aposta.");
+      }
+
+      if (!(await requireMediator({
+        member: message.member,
+        user: message.author,
+        guild: message.guild,
+        reply: options => message.reply(options)
+      }))) {
+        return;
+      }
+
+      if (bet.mediatorId && bet.mediatorId !== message.author.id) {
+        return message.reply("❌ Você não é o Mediador responsável por esta aposta.");
+      }
+
+      return message.reply({
+        embeds: [
+          makeEmbed(
+            "👨‍⚖️ PAINEL DO MEDIADOR",
+            [
+              `🎮 **Formato:** ${bet.format}`,
+              `📱 **Modalidade:** ${modalityName(bet.modality)}`,
+              `💰 **Valor:** ${money(bet.value)}`,
+              `💵 **Pagamento ao vencedor:** ${money(bet.value * 2)}`,
+              "",
+              "Use os botões abaixo para administrar a aposta."
+            ].join("\n")
+          )
+        ],
+        components: mediatorControlButtons(bet.id)
+      });
     }
   } catch (error) {
     console.error("❌ Erro no comando prefixado:", error);
@@ -2148,6 +2187,79 @@ client.on("interactionCreate", async interaction => {
         return interaction.reply({
           content: "✅ Aparência atualizada.",
           ephemeral: true
+        });
+      }
+
+      /* SALA FREE FIRE */
+      if (interaction.customId.startsWith("room_modal|")) {
+        if (!(await requireMediator(interaction))) return;
+
+        const betId = interaction.customId.split("|")[1];
+        const bet = db.bets[betId];
+
+        if (!bet) {
+          return deny(interaction, "❌ Aposta não encontrada.");
+        }
+
+        if (bet.mediatorId && bet.mediatorId !== interaction.user.id) {
+          return deny(interaction, "❌ Você não é o Mediador responsável.");
+        }
+
+        const roomId =
+          interaction.fields.getTextInputValue("room_id").trim();
+
+        const roomPassword =
+          interaction.fields.getTextInputValue("room_password").trim();
+
+        if (!roomId || !roomPassword) {
+          return deny(interaction, "❌ Informe o ID e a senha da sala.");
+        }
+
+        bet.roomId = roomId;
+        bet.roomPassword = roomPassword;
+
+        const paymentValue = Number((bet.value * 2).toFixed(2));
+        const paymentLabel = paymentValue.toFixed(2).replace(".", "-");
+
+        const channel = interaction.channel;
+
+        if (channel && channel.isTextBased() && "setName" in channel) {
+          await channel.setName(`pagamento-${paymentLabel}`).catch(error => {
+            console.error("❌ Não foi possível renomear o canal:", error);
+          });
+        }
+
+        saveDatabase();
+
+        const embed = makeEmbed(
+          "🎮 SALA FREE FIRE",
+          [
+            `💰 **Valor da aposta:** ${money(bet.value)}`,
+            `💵 **Valor a pagar ao vencedor:** ${money(paymentValue)}`,
+            "",
+            `🆔 **ID da sala:** \`${roomId}\``,
+            `🔐 **Senha:** \`${roomPassword}\``,
+            "",
+            `📌 **Canal:** \`pagamento-${paymentLabel}\``
+          ].join("\n")
+        );
+
+        return interaction.reply({
+          embeds: [embed],
+          components: [
+            new ActionRowBuilder().addComponents(
+              new ButtonBuilder()
+                .setCustomId(`room_copy_id|${bet.id}`)
+                .setLabel("Copiar ID")
+                .setEmoji("🆔")
+                .setStyle(ButtonStyle.Secondary),
+              new ButtonBuilder()
+                .setCustomId(`room_copy_password|${bet.id}`)
+                .setLabel("Copiar senha")
+                .setEmoji("🔐")
+                .setStyle(ButtonStyle.Secondary)
+            )
+          ]
         });
       }
 
