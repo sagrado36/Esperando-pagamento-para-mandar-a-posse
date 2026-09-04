@@ -247,18 +247,25 @@ function configEmbed() {
   return makeEmbed(
     "⚙️ CONFIGURAÇÃO DO BOT",
     [
-      "Use os botões abaixo para configurar cada parte do sistema.",
+      "Configure o sistema usando os botões abaixo.",
       "",
-      `👤 **Mediador:** ${c.mediatorRoleId ? `<@&${c.mediatorRoleId}>` : "Não configurado"}`,
-      `🔎 **Analista:** ${c.analystRoleId ? `<@&${c.analystRoleId}>` : "Não configurado"}`,
-      `👑 **ADMs:** ${c.admins.length}/20`,
-      `💰 **Taxa:** ${money(c.fee)}`,
-      `🎨 **Cor:** \`${c.embedColor}\``,
-      `🖼️ **Foto:** ${c.profileImage ? "Configurada" : "Não configurada"}`,
-      `📱 **Canal Mobile:** ${c.ssmobChannelId ? `<#${c.ssmobChannelId}>` : "Não configurado"}`,
-      `🖥️ **Canal Emulador:** ${c.ssemuChannelId ? `<#${c.ssemuChannelId}>` : "Não configurado"}`,
-      `👨‍⚖️ **Fila de Mediadores:** ${c.mediatorQueueChannelId ? `<#${c.mediatorQueueChannelId}>` : "Não configurada"}`,
-      `📁 **Categoria das apostas:** ${c.betCategoryId ? `<#${c.betCategoryId}>` : "Não configurada"}`
+      "🛡️ **EQUIPE**",
+      `• Mediador: ${c.mediatorRoleId ? `<@&${c.mediatorRoleId}>` : "❌ Não configurado"}`,
+      `• Analista: ${c.analystRoleId ? `<@&${c.analystRoleId}>` : "❌ Não configurado"}`,
+      `• Administradores: **${c.admins.length}/20**`,
+      "",
+      "💰 **APOSTAS**",
+      `• Taxa: **${money(c.fee)}**`,
+      `• Categoria: ${c.betCategoryId ? `<#${c.betCategoryId}>` : "❌ Não configurada"}`,
+      "",
+      "📢 **CANAIS**",
+      `• Mobile: ${c.ssmobChannelId ? `<#${c.ssmobChannelId}>` : "❌ Não configurado"}`,
+      `• Emulador: ${c.ssemuChannelId ? `<#${c.ssemuChannelId}>` : "❌ Não configurado"}`,
+      `• Fila de Mediadores: ${c.mediatorQueueChannelId ? `<#${c.mediatorQueueChannelId}>` : "❌ Não configurada"}`,
+      "",
+      "🎨 **APARÊNCIA**",
+      `• Cor: \`${c.embedColor}\``,
+      `• Foto do bot: ${c.profileImage ? "✅ Configurada" : "❌ Não configurada"}`
     ].join("\n")
   );
 }
@@ -268,6 +275,7 @@ function makeEmbed(title, description = "") {
     .setColor(db.config.embedColor || "#5865F2")
     .setTitle(title)
     .setDescription(description)
+    .setFooter({ text: "🎮 Sistema de Apostas" })
     .setTimestamp();
 
   if (db.config.profileImage && validUrl(db.config.profileImage)) {
@@ -361,26 +369,30 @@ function getQueue(format, modality, value, mode) {
 function queueDescription(queue) {
   const players = queue.players.length
     ? queue.players.map((id, index) => `${index + 1}. <@${id}>`).join("\n")
-    : "A fila está vazia.";
+    : "🟢 Aguardando jogadores...";
 
   const mode = queue.format === "1x1"
     ? queue.mode === "gelo_infinito"
-      ? "Gelo Infinito"
-      : "Gelo Normal"
-    : "Partida padrão";
+      ? "♾️ Gelo Infinito"
+      : queue.mode === "gelo_normal"
+        ? "🧊 Gelo Normal"
+        : "🎮 Escolha o modo nos botões abaixo"
+    : "🎮 Partida padrão";
 
   return [
-    `🎮 **Formato:** ${queue.format}`,
+    `🎯 **Formato:** ${queue.format}`,
     `📱 **Modalidade:** ${modalityName(queue.modality)}`,
-    `💰 **Valor:** ${money(queue.value)}`,
-    `🧊 **Modo:** ${mode}`,
+    `💰 **Valor por jogador:** ${money(queue.value)}`,
+    `⚙️ **Modo:** ${mode}`,
     "",
-    "👥 **Jogadores:**",
+    "👥 **JOGADORES**",
     players,
     "",
-    `📌 **Vagas preenchidas:** ${queue.players.length}/${requiredPlayers(queue.format)}`,
+    `📊 **Vagas:** ${queue.players.length}/${requiredPlayers(queue.format)}`,
     "",
-    "Escolha uma opção abaixo para entrar ou sair."
+    queue.format === "1x1"
+      ? "⚡ **Como entrar:** escolha **Gelo Normal** ou **Gelo Infinito**.\n🚪 Use **Sair da fila** para remover sua participação."
+      : "⚡ **Como entrar:** clique em **Entrar na fila**.\n🚪 Use **Sair da fila** para remover sua participação."
   ].join("\n");
 }
 
@@ -389,10 +401,15 @@ function queueComponents(queue) {
     return [
       new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-          .setCustomId(`queue_join|${queue.id}`)
-          .setLabel("Entrar")
-          .setEmoji("➕")
-          .setStyle(ButtonStyle.Success),
+          .setCustomId(`queue_join|${queue.id}|gelo_normal`)
+          .setLabel("Gelo Normal")
+          .setEmoji("🧊")
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId(`queue_join|${queue.id}|gelo_infinito`)
+          .setLabel("Gelo Infinito")
+          .setEmoji("♾️")
+          .setStyle(ButtonStyle.Primary),
         new ButtonBuilder()
           .setCustomId(`queue_leave|${queue.id}`)
           .setLabel("Sair da fila")
@@ -407,7 +424,7 @@ function queueComponents(queue) {
       new ButtonBuilder()
         .setCustomId(`queue_join|${queue.id}`)
         .setLabel("Entrar na fila")
-        .setEmoji("➕")
+        .setEmoji("🎮")
         .setStyle(ButtonStyle.Success),
       new ButtonBuilder()
         .setCustomId(`queue_leave|${queue.id}`)
@@ -425,7 +442,7 @@ function queueOneVsOneModeComponents(format, modality, value, channelId) {
         .setCustomId(`publish_queue|${format}|${modality}|${value}|gelo_normal|${channelId}`)
         .setLabel("Gelo Normal")
         .setEmoji("🧊")
-        .setStyle(ButtonStyle.Primary),
+        .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
         .setCustomId(`publish_queue|${format}|${modality}|${value}|gelo_infinito|${channelId}`)
         .setLabel("Gelo Infinito")
@@ -438,26 +455,25 @@ function queueOneVsOneModeComponents(format, modality, value, channelId) {
 function mediatorQueueEmbed() {
   const list = db.mediatorQueue.length
     ? db.mediatorQueue.map((id, index) => `${index + 1}. <@${id}>`).join("\n")
-    : "Nenhum Mediador está na fila.";
+    : "🟢 Nenhum Mediador está aguardando.";
 
-  const next =
-    db.mediatorQueue.length > 0
-      ? db.mediatorQueue[db.mediatorRotation % db.mediatorQueue.length]
-      : null;
+  const next = db.mediatorQueue.length > 0
+    ? db.mediatorQueue[db.mediatorRotation % db.mediatorQueue.length]
+    : null;
 
   return makeEmbed(
     "👨‍⚖️ FILA DE MEDIADORES",
     [
-      "Somente usuários com o cargo **Mediador** podem participar.",
+      "Mediadores disponíveis para receber novas apostas.",
       "",
-      "📋 **Ordem atual:**",
+      "📋 **ORDEM DE ATENDIMENTO**",
       list,
       "",
       next
-        ? `🎯 **Próximo do rodízio:** <@${next}>`
-        : "🎯 **Próximo do rodízio:** nenhum",
+        ? `🎯 **Próximo Mediador:** <@${next}>`
+        : "🎯 **Próximo Mediador:** nenhum",
       "",
-      "O sistema utiliza rodízio automático para distribuir as partidas."
+      "🔄 A distribuição segue automaticamente a ordem da fila."
     ].join("\n")
   );
 }
@@ -529,22 +545,25 @@ async function updateMediatorQueueMessage(guild) {
 
 function betEmbed(bet) {
   return makeEmbed(
-    "🎮 APOSTA",
+    "🎮 APOSTA INICIADA",
     [
-      `🎯 **Formato:** ${bet.format}`,
-      `📱 **Modalidade:** ${modalityName(bet.modality)}`,
-      `💰 **Valor:** ${money(bet.value)}`,
-      `🧊 **Modo:** ${bet.mode === "gelo_infinito" ? "Gelo Infinito" : "Gelo Normal"}`,
+      "Os jogadores foram encontrados e a aposta foi criada.",
       "",
-      "👥 **Jogadores:**",
-      bet.players.map(id => `• <@${id}>`).join("\n"),
+      "📌 **DADOS DA APOSTA**",
+      `• Formato: **${bet.format}**`,
+      `• Modalidade: **${modalityName(bet.modality)}**`,
+      `• Valor por jogador: **${money(bet.value)}**`,
+      `• Modo: **${bet.mode === "gelo_infinito" ? "♾️ Gelo Infinito" : "🧊 Gelo Normal"}**`,
+      "",
+      "👥 **JOGADORES**",
+      bet.players.map((id, index) => `${index + 1}. <@${id}>`).join("\n"),
       "",
       bet.mediatorId
         ? `👨‍⚖️ **Mediador:** <@${bet.mediatorId}>`
         : "👨‍⚖️ **Mediador:** aguardando distribuição",
       "",
-      "Cada jogador deve confirmar a aposta.",
-      "Se alguém cancelar, o canal será excluído em 5 segundos."
+      "✅ Cada jogador deve confirmar a aposta abaixo.",
+      "❌ Se alguém cancelar, a aposta será encerrada."
     ].join("\n")
   );
 }
@@ -600,13 +619,16 @@ function paymentEmbed(bet) {
 
   if (!entries.length) {
     return makeEmbed(
-      "💳 PAGAMENTO",
+      "💳 PAGAMENTO VIA PIX",
       [
-        `💰 **Valor da aposta:** ${money(bet.value)}`,
-        `🏆 **Valor total:** ${money(bet.value * 2)}`,
+        "Os dois jogadores confirmaram a aposta.",
         "",
-        "⚠️ Nenhum cadastro Pix foi configurado ainda.",
-        "Um ADM deve usar `/cadastro` para cadastrar os dados."
+        `💰 **Valor por jogador:** ${money(bet.value)}`,
+        `🏆 **Total da aposta:** ${money(bet.value * 2)}`,
+        "",
+        "⚠️ **PIX NÃO CONFIGURADO**",
+        "Nenhum ADM possui cadastro Pix.",
+        "Um ADM deve usar `/cadastro` para cadastrar os dados de pagamento."
       ].join("\n")
     );
   }
@@ -616,13 +638,17 @@ function paymentEmbed(bet) {
   const result = makeEmbed(
     "💳 PAGAMENTO VIA PIX",
     [
-      `💰 **Valor de cada jogador:** ${money(bet.value)}`,
-      `🏆 **Total da aposta:** ${money(bet.value * 2)}`,
+      "Os dois jogadores confirmaram a aposta. Realize o pagamento abaixo e aguarde o Mediador.",
       "",
-      `👤 **Nome:** ${pix.name}`,
-      `🔑 **Chave Pix:** \`${pix.key}\``,
+      "💰 **VALORES**",
+      `• Cada jogador: **${money(bet.value)}**`,
+      `• Total da aposta: **${money(bet.value * 2)}**`,
       "",
-      "Após realizar o pagamento, aguarde o Mediador."
+      "👤 **RESPONSÁVEL PELO PIX**",
+      `• Nome: **${pix.name}**`,
+      `• Chave Pix: \`${pix.key}\``,
+      "",
+      "📌 Após pagar, não envie comprovante no chat sem orientação do Mediador."
     ].join("\n")
   );
 
@@ -732,6 +758,7 @@ async function createBetFromQueue(interaction, queue) {
   }
 
   const players = queue.players.splice(0, needed);
+  const matchMode = queue.mode;
 
   const id =
     `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -743,7 +770,7 @@ async function createBetFromQueue(interaction, queue) {
     format: queue.format,
     modality: queue.modality,
     value: queue.value,
-    mode: queue.mode,
+    mode: matchMode,
     players,
     mediatorId: null,
     confirmedBy: [],
@@ -754,6 +781,8 @@ async function createBetFromQueue(interaction, queue) {
     roomPassword: null,
     createdAt: Date.now()
   };
+
+  if (queue.format === "1x1") queue.mode = "choice";
 
   db.bets[id] = bet;
 
@@ -1445,6 +1474,7 @@ client.on("interactionCreate", async interaction => {
       /* FILA */
       if (action === "queue_join") {
         const queue = db.queues[parts[0]];
+        const selectedMode = parts[1] || null;
 
         if (!queue) {
           return deny(interaction, "❌ Esta fila não existe mais.");
@@ -1468,6 +1498,21 @@ client.on("interactionCreate", async interaction => {
           );
         }
 
+        if (queue.format === "1x1") {
+          if (!["gelo_normal", "gelo_infinito"].includes(selectedMode)) {
+            return deny(interaction, "❌ Escolha Gelo Normal ou Gelo Infinito.");
+          }
+
+          if (queue.players.length > 0 && queue.mode !== selectedMode) {
+            return deny(
+              interaction,
+              `❌ Esta fila já está configurada para **${queue.mode === "gelo_infinito" ? "Gelo Infinito" : "Gelo Normal"}**. Escolha o mesmo modo do primeiro jogador.`
+            );
+          }
+
+          queue.mode = selectedMode;
+        }
+
         queue.players.push(interaction.user.id);
 
         const bet =
@@ -1484,6 +1529,8 @@ client.on("interactionCreate", async interaction => {
             ephemeral: true
           });
         }
+
+        await refreshQueueMessage(queue, interaction.guild);
 
         await interaction.reply({
           content:
@@ -1508,6 +1555,7 @@ client.on("interactionCreate", async interaction => {
         );
 
         saveDatabase();
+        await refreshQueueMessage(queue, interaction.guild);
 
         return interaction.reply({
           content:
@@ -1887,7 +1935,7 @@ client.on("interactionCreate", async interaction => {
        MENUS DE CANAIS
     ---------------------------------------------------- */
 
-    if (interaction.isChannelSelectMenu() && interaction.customId !== "fila_setup_channel") {
+    if (interaction.isChannelSelectMenu()) {
       if (!(await requireAdmin(interaction))) return;
 
       const channelId = interaction.values[0];
@@ -2193,7 +2241,7 @@ client.on("interactionCreate", async interaction => {
 
       try {
         for (const value of values) {
-          const modes = setup.format === "1x1" ? ["gelo_normal", "gelo_infinito"] : ["normal"];
+          const modes = setup.format === "1x1" ? ["choice"] : ["normal"];
           for (const mode of modes) {
             const queue = getQueue(setup.format, setup.modality, value, mode);
             queue.channelId = channel.id;
@@ -2257,7 +2305,7 @@ client.on("interactionCreate", async interaction => {
         try {
           for (const value of values) {
             const modes = setup.format === "1x1"
-              ? ["gelo_normal", "gelo_infinito"]
+              ? ["choice"]
               : ["normal"];
 
             for (const mode of modes) {
