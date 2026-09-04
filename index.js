@@ -1,3 +1,5 @@
+
+// ================= PARTE 1/6 =================
 // index.js
 require("dotenv").config();
 
@@ -18,6 +20,9 @@ const {
   SlashCommandBuilder,
   REST,
   Routes,
+  Events,
+  ChannelSelectMenuBuilder,
+  RoleSelectMenuBuilder,
 } = require("discord.js");
 
 const fs = require("fs");
@@ -995,6 +1000,8 @@ function queueSetupFormatMenu() {
           label: format,
           value: format,
           emoji: "🎮",
+
+// ================= PARTE 2/6 =================
         }))
       )
   );
@@ -1995,6 +2002,8 @@ async function handleStringSelect(interaction) {
     });
   }
 
+
+// ================= PARTE 3/6 =================
   if (customId === "queue_setup_mode") {
     const setup = client.queueSetup[interaction.user.id];
 
@@ -2966,6 +2975,7 @@ function createFeeModal() {
     );
 }
 
+
 function createFeeModal() {
   return new ModalBuilder()
     .setCustomId(
@@ -2994,6 +3004,8 @@ function createFeeModal() {
           .setMaxLength(6)
       )
     );
+
+// ================= PARTE 4/6 =================
 }
 
 function configButtons() {
@@ -3995,6 +4007,8 @@ async function handleQueueLeave(
             messageId
           );
 
+// ================= PARTE 5/6 =================
+
         if (
           message
         ) {
@@ -4464,153 +4478,301 @@ function createCustomQueueModal() {
     );
 }
 
-async function handleStringSelect(interaction) {
-  const customId = interaction.customId;
+async function handleStringSelect(
+  interaction
+) {
+  const id =
+    interaction.customId;
 
-  if (customId === "queue_setup_format") {
-    const setup = client.queueSetup[interaction.user.id];
+  const value =
+    interaction.values?.[0];
 
-    if (!setup) {
-      return sendSafeReply(interaction, {
+  if (!value) {
+    return sendSafeReply(
+      interaction,
+      {
         content:
-          "❌ Sua configuração de fila expirou.",
+          "❌ Nenhuma opção foi selecionada.",
         ephemeral: true,
-      });
-    }
-
-    const format = interaction.values?.[0];
-
-    if (!Object.values(FORMATS).includes(format)) {
-      return sendSafeReply(interaction, {
-        content: "❌ Formato inválido.",
-        ephemeral: true,
-      });
-    }
-
-    setup.format = format;
-
-    return editSafeReply(interaction, {
-      content:
-        `🎮 Formato selecionado: **${format}**\n\nSelecione o modo:`,
-      components: [
-        queueSetupModeMenu(),
-      ],
-    });
+      }
+    );
   }
 
-  if (customId === "queue_setup_mode") {
-    const setup = client.queueSetup[interaction.user.id];
+  if (
+    id ===
+    "queue_setup_format"
+  ) {
+    if (
+      !FORMATS.includes(
+        value
+      )
+    ) {
+      return sendSafeReply(
+        interaction,
+        {
+          content:
+            "❌ Formato inválido.",
+          ephemeral: true,
+        }
+      );
+    }
 
-    if (!setup) {
-      return sendSafeReply(interaction, {
+    interaction.client.queueSetup =
+      interaction.client.queueSetup ||
+      {};
+
+    interaction.client.queueSetup[
+      interaction.user.id
+    ] =
+      interaction.client.queueSetup[
+        interaction.user.id
+      ] || {};
+
+    interaction.client.queueSetup[
+      interaction.user.id
+    ].format =
+      value;
+
+    return sendSafeReply(
+      interaction,
+      {
         content:
-          "❌ Sua configuração de fila expirou.",
+          `✅ Formato selecionado: **${value}**.`,
         ephemeral: true,
-      });
-    }
-
-    const mode = interaction.values?.[0];
-
-    if (!Object.keys(MODES).includes(mode)) {
-      return sendSafeReply(interaction, {
-        content: "❌ Modo inválido.",
-        ephemeral: true,
-      });
-    }
-
-    setup.mode = mode;
-
-    return editSafeReply(interaction, {
-      content:
-        `🎯 Modo selecionado: **${MODES[mode]}**\n\nSelecione o valor:`,
-      components: [
-        queueSetupValueMenu(),
-      ],
-    });
+      }
+    );
   }
 
-  if (customId === "queue_setup_value") {
-    const setup = client.queueSetup[interaction.user.id];
-
-    if (!setup) {
-      return sendSafeReply(interaction, {
-        content:
-          "❌ Sua configuração de fila expirou.",
-        ephemeral: true,
-      });
+  if (
+    id ===
+    "queue_setup_mode"
+  ) {
+    if (
+      !MODES.includes(
+        value
+      )
+    ) {
+      return sendSafeReply(
+        interaction,
+        {
+          content:
+            "❌ Modalidade inválida.",
+          ephemeral: true,
+        }
+      );
     }
 
-    const rawValue = interaction.values?.[0];
-    const selectedValue = Number(rawValue);
+    interaction.client.queueSetup =
+      interaction.client.queueSetup ||
+      {};
+
+    interaction.client.queueSetup[
+      interaction.user.id
+    ] =
+      interaction.client.queueSetup[
+        interaction.user.id
+      ] || {};
+
+    interaction.client.queueSetup[
+      interaction.user.id
+    ].mode =
+      value;
+
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          `✅ Modalidade selecionada: **${modeLabel(
+            value
+          )}**.`,
+        ephemeral: true,
+      }
+    );
+  }
+
+  if (
+    id ===
+    "queue_setup_value"
+  ) {
+    const selectedValue =
+      Number(value);
 
     if (
-      !Number.isFinite(selectedValue) ||
-      !VALUES.includes(selectedValue)
+      !Number.isFinite(
+        selectedValue
+      ) ||
+      !VALUES.includes(
+        selectedValue
+      )
     ) {
-      return sendSafeReply(interaction, {
+      return sendSafeReply(
+        interaction,
+        {
+          content:
+            "❌ Valor inválido.",
+          ephemeral: true,
+        }
+      );
+    }
+
+    interaction.client.queueSetup =
+      interaction.client.queueSetup || {};
+    interaction.client.queueSetup[interaction.user.id] =
+      interaction.client.queueSetup[interaction.user.id] || {};
+    interaction.client.queueSetup[interaction.user.id].value =
+      selectedValue;
+
+    return sendSafeReply(
+      interaction,
+      {
         content:
-          "❌ O valor selecionado não é válido. Escolha um valor da lista.",
+          `✅ Valor selecionado: **${formatMoney(selectedValue)}**.`,
         ephemeral: true,
-      });
-    }
-
-    setup.value = selectedValue;
-
-    return editSafeReply(interaction, {
-      content:
-        `💰 Valor selecionado: **${formatMoney(selectedValue)}**\n\nSelecione o tipo da fila:`,
-      components: [
-        queueSetupTypeMenu(),
-      ],
-    });
-  }
-
-  if (customId === "queue_setup_type") {
-    const setup = client.queueSetup[interaction.user.id];
-
-    if (!setup) {
-      return sendSafeReply(interaction, {
-        content:
-          "❌ Sua configuração de fila expirou.",
-        ephemeral: true,
-      });
-    }
-
-    const type = interaction.values?.[0];
-
-    if (!Object.values(QUEUE_TYPES).includes(type)) {
-      return sendSafeReply(interaction, {
-        content: "❌ Tipo inválido.",
-        ephemeral: true,
-      });
-    }
-
-    setup.type = type;
-
-    const guild = interaction.guild;
-
-    if (!guild) {
-      return sendSafeReply(interaction, {
-        content:
-          "❌ Servidor não encontrado.",
-        ephemeral: true,
-      });
-    }
-
-    return editSafeReply(interaction, {
-      content:
-        `🏷️ Tipo selecionado: **${type === "misto" ? "Misto" : "Normal"}**\n\nSelecione o canal onde a fila será publicada:`,
-      components: [
-        queueSetupChannelMenu(guild),
-      ],
-    });
-  }
-
-  if (customId === "queue_setup_channel") {
-    return handleQueueSetupChannel(interaction);
+      }
+    );
   }
 }
 
+async function handleQueueSetupChannel(
+  interaction
+) {
+  const channelId =
+    interaction.values?.[0];
+
+  if (!channelId) {
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          "❌ Canal inválido.",
+        ephemeral: true,
+      }
+    );
+  }
+
+  const setup =
+    interaction.client.queueSetup?.[
+      interaction.user.id
+    ];
+
+  if (
+    !setup?.format ||
+    !setup?.mode ||
+    !Number.isFinite(
+      setup?.value
+    )
+  ) {
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          "❌ Primeiro selecione formato, modalidade e valor.",
+        ephemeral: true,
+      }
+    );
+  }
+
+  if (
+    !FORMATS.includes(
+      setup.format
+    )
+  ) {
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          "❌ Formato inválido.",
+        ephemeral: true,
+      }
+    );
+  }
+
+  if (
+    !MODES.includes(
+      setup.mode
+    )
+  ) {
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          "❌ Modalidade inválida.",
+        ephemeral: true,
+      }
+    );
+  }
+
+  if (
+    !VALUES.includes(
+      setup.value
+    )
+  ) {
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          "❌ Valor inválido.",
+        ephemeral: true,
+      }
+    );
+  }
+
+  const targetChannel =
+    interaction.guild.channels.cache.get(
+      channelId
+    );
+
+  if (
+    !targetChannel ||
+    targetChannel.type !==
+      ChannelType.GuildText
+  ) {
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          "❌ O canal selecionado não é um canal de texto válido.",
+        ephemeral: true,
+      }
+    );
+  }
+
+  try {
+    await registerQueueMessage(
+      targetChannel,
+      interaction.guild.id,
+      setup.format,
+      setup.mode,
+      setup.value
+    );
+
+    delete interaction.client.queueSetup[
+      interaction.user.id
+    ];
+
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          `✅ Fila **${setup.format} ${setup.mode} — ${formatMoney(
+            setup.value
+          )}** publicada em <#${channelId}>.`,
+        ephemeral: true,
+      }
+    );
+  } catch (
+    error
+  ) {
+    return sendSafeReply(
+      interaction,
+      {
+        content:
+          `❌ ${error.message}`,
+        ephemeral: true,
+      }
+    );
+  }
+}
 
 async function handleSlashCommand(
   interaction
@@ -4750,7 +4912,9 @@ const commands = [
       "Gerenciar mediadores"
     )
     .toJSON(),
+
 ];
+
 
 const rest =
   new REST({
@@ -4766,6 +4930,397 @@ async function registerCommands() {
     );
 
     await rest.put(
+      Routes.applicationGuildCommands(
+        CLIENT_ID,
+        GUILD_ID
+      ),
+      {
+        body: commands,
+      }
+    );
+
+    console.log(
+      "Comandos registrados com sucesso."
+    );
+  } catch (
+    error
+  ) {
+    console.error(
+      "Erro ao registrar comandos:",
+      error
+    );
+  }
+}
+
+client.once(
+  Events.ClientReady,
+  async ready => {
+    console.log(
+      `🤖 Bot conectado como ${ready.user.tag}`
+    );
+
+    await registerCommands();
+
+    /*
+     * Restaura o avatar configurado,
+     * caso exista no banco.
+     */
+    try {
+      const config =
+        getGuildConfig(
+          GUILD_ID
+        );
+
+      if (
+        config.botAvatar
+      ) {
+        await client.user.setAvatar(
+          config.botAvatar
+        );
+      }
+    } catch (
+      error
+    ) {
+      console.error(
+        "Não foi possível restaurar o avatar:",
+        error
+      );
+    }
+
+    /*
+     * Atualiza a fila de mediadores
+     * após o bot entrar.
+     */
+    try {
+      const guild =
+        await client.guilds.fetch(
+          GUILD_ID
+        );
+
+      if (
+        guild
+      ) {
+        await updateMediatorQueueMessage(
+          guild
+        );
+      }
+    } catch (
+      error
+    ) {
+      console.error(
+
+// ================= PARTE 6/6 =================
+        "Erro ao restaurar fila de mediadores:",
+        error
+      );
+    }
+  }
+);
+
+client.on(
+  Events.InteractionCreate,
+  async interaction => {
+    try {
+      if (
+        interaction.isChatInputCommand()
+      ) {
+        await handleSlashCommand(
+          interaction
+        );
+
+        return;
+      }
+
+      if (
+        interaction.isButton()
+      ) {
+        await handleButton(
+          interaction
+        );
+
+        return;
+      }
+
+      if (
+        interaction.isModalSubmit()
+      ) {
+        await handleModalSubmit(
+          interaction
+        );
+
+        return;
+      }
+
+      if (
+        interaction.isRoleSelectMenu()
+      ) {
+        await handleRoleSelect(
+          interaction
+        );
+
+        return;
+      }
+
+      if (
+        interaction.isChannelSelectMenu()
+      ) {
+        if (
+          interaction.customId ===
+          "queue_setup_channel"
+        ) {
+          await handleQueueSetupChannel(
+            interaction
+          );
+
+          return;
+        }
+
+        await handleChannelSelect(
+          interaction
+        );
+
+        return;
+      }
+
+      if (
+        interaction.isStringSelectMenu()
+      ) {
+        await handleStringSelect(
+          interaction
+        );
+
+        return;
+      }
+    } catch (
+      error
+    ) {
+      console.error(
+        "Erro ao processar interação:",
+        error
+      );
+
+      await sendSafeReply(
+        interaction,
+        {
+          content:
+            "❌ Ocorreu um erro ao processar esta ação.",
+          ephemeral: true,
+        }
+      );
+    }
+  }
+);
+
+client.on(
+  Events.MessageCreate,
+  async message => {
+    try {
+      if (
+        message.author.bot
+      ) {
+        return;
+      }
+
+      if (
+        !message.guild
+      ) {
+        return;
+      }
+
+      /*
+       * Comandos com prefixo.
+       */
+      if (
+        !message.content.startsWith(
+          PREFIX
+        )
+      ) {
+        return;
+      }
+
+      const args =
+        message.content
+          .slice(
+            PREFIX.length
+          )
+          .trim()
+          .split(/\s+/);
+
+      const command =
+        args
+          .shift()
+          ?.toLowerCase();
+
+      if (
+        command ===
+        "cadastro"
+      ) {
+        if (
+          !isAdministrator(
+            message.member
+          )
+        ) {
+          return message.reply(
+            "❌ Apenas administradores podem utilizar este comando."
+          );
+        }
+
+        return message.reply({
+          embeds: [
+            createCadastroEmbed(
+              message.guild.id
+            ),
+          ],
+          components:
+            cadastroComponents(),
+        });
+      }
+
+      if (
+        command ===
+        "config"
+      ) {
+        if (
+          !isAdministrator(
+            message.member
+          )
+        ) {
+          return message.reply(
+            "❌ Apenas administradores podem utilizar este comando."
+          );
+        }
+
+        return message.reply({
+          embeds: [
+            createConfigEmbed(
+              message.guild.id
+            ),
+          ],
+          components:
+            configButtons(),
+        });
+      }
+
+      if (
+        command ===
+        "fila"
+      ) {
+        if (
+          !isAdministrator(
+            message.member
+          )
+        ) {
+          return message.reply(
+            "❌ Apenas administradores podem utilizar este comando."
+          );
+        }
+
+        return message.reply({
+          embeds: [
+            createQueueSetupEmbed(
+              message.guild.id
+            ),
+          ],
+          components:
+            queueSetupComponents(),
+        });
+      }
+
+      if (
+        command ===
+        "med"
+      ) {
+        if (
+          !isAdministrator(
+            message.member
+          )
+        ) {
+          return message.reply(
+            "❌ Apenas administradores podem utilizar este comando."
+          );
+        }
+
+        return message.reply({
+          embeds: [
+            createEmbed(
+              message.guild.id,
+              "🎯 MEDIADORES",
+              "Gerencie a fila de mediadores usando os botões abaixo."
+            ),
+          ],
+          components:
+            mediatorConfigComponents(),
+        });
+      }
+    } catch (
+      error
+    ) {
+      console.error(
+        "Erro ao processar mensagem:",
+        error
+      );
+    }
+  }
+);
+
+process.on(
+  "unhandledRejection",
+  error => {
+    console.error(
+      "Unhandled Promise Rejection:",
+      error
+    );
+  }
+);
+
+process.on(
+  "uncaughtException",
+  error => {
+    console.error(
+      "Uncaught Exception:",
+      error
+    );
+  }
+);
+
+client.login(
+  TOKEN
+);
+/* Preserved orphaned duplicate command tail from original file:
+
+      "fila"
+    )
+    .setDescription(
+      "Configurar filas"
+    )
+    .toJSON(),
+
+  new SlashCommandBuilder()
+    .setName(
+      "med"
+    )
+    .setDescription(
+      "Gerenciar mediadores"
+    )
+    .toJSON(),
+];
+*/
+
+
+const rest2 =
+  new REST({
+    version: "10",
+  }).setToken(
+    TOKEN
+  );
+
+async function registerCommands2() {
+  try {
+    console.log(
+      "Registrando comandos slash..."
+    );
+
+    await rest2.put(
       Routes.applicationGuildCommands(
         CLIENT_ID,
         GUILD_ID
