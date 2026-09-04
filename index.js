@@ -1938,32 +1938,115 @@ client.on("interactionCreate", async interaction => {
     if (interaction.isChannelSelectMenu()) {
       if (!(await requireAdmin(interaction))) return;
 
+      if (interaction.customId === "fila_setup_channel") {
+        const setup = filaSetup.get(interaction.user.id) || {
+          format: null,
+          modality: null,
+          channelId: null
+        };
+        setup.channelId = interaction.values[0];
+        filaSetup.set(interaction.user.id, setup);
+
+        if (!setup.format || !setup.modality) {
+          return interaction.deferUpdate();
+        }
+
+        // Confirma imediatamente a seleção para não deixar a interação expirar.
+        await interaction.deferUpdate();
+
+        const channel = await getChannel(interaction.guild, setup.channelId);
+        if (!channel || !channel.isTextBased() || typeof channel.send !== "function") {
+          filaSetup.delete(interaction.user.id);
+          return interaction.editReply({
+            content: "❌ O canal selecionado é inválido ou não permite o envio de mensagens.",
+            components: []
+          });
+        }
+
+        const values = ALLOWED_VALUES.slice().sort((a, b) => b - a);
+
+        try {
+          for (const value of values) {
+            // 1x1 = uma fila por valor, com exatamente 3 botões.
+            const modes = setup.format === "1x1" ? ["choice"] : ["normal"];
+
+            for (const mode of modes) {
+              const queue = getQueue(setup.format, setup.modality, value, mode);
+              queue.channelId = channel.id;
+              queue.guildId = interaction.guild.id;
+
+              let message = queue.messageId
+                ? await channel.messages.fetch(queue.messageId).catch(() => null)
+                : null;
+
+              const payload = {
+                embeds: [makeEmbed(`🎮 FILA ${setup.format}`, queueDescription(queue))],
+                components: queueComponents(queue)
+              };
+
+              if (message) {
+                await message.edit(payload);
+              } else {
+                message = await channel.send(payload);
+                queue.messageId = message.id;
+              }
+            }
+          }
+
+          saveDatabase();
+          filaSetup.delete(interaction.user.id);
+
+          return interaction.editReply({
+            content: [
+              "✅ **FILAS PUBLICADAS COM SUCESSO!**",
+              "",
+              `📌 **Canal:** ${channel}`,
+              `🎮 **Formato:** ${setup.format}`,
+              `📱 **Modalidade:** ${modalityName(setup.modality)}`,
+              `💰 **Valores:** ${values.map(money).join(", ")}`,
+              "",
+              "📋 As filas já estão disponíveis no canal escolhido."
+            ].join("\n"),
+            components: []
+          });
+        } catch (error) {
+          console.error("❌ Erro ao publicar as filas pelo /fila:", error);
+          filaSetup.delete(interaction.user.id);
+
+          return interaction.editReply({
+            content: [
+              "❌ **NÃO FOI POSSÍVEL PUBLICAR AS FILAS.**",
+              "",
+              "Verifique as permissões do bot no canal escolhido: Ver Canal, Enviar Mensagens, Inserir Links e Usar Componentes.",
+              "",
+              `Detalhe técnico: ${error?.message || "erro desconhecido"}`
+            ].join("\n"),
+            components: []
+          });
+        }
+      }
+
       const channelId = interaction.values[0];
 
       if (interaction.customId === "channel_ssmob") {
         db.config.ssmobChannelId = channelId;
       }
-
       if (interaction.customId === "channel_ssemu") {
         db.config.ssemuChannelId = channelId;
       }
-
       if (interaction.customId === "channel_mediator_queue") {
         db.config.mediatorQueueChannelId = channelId;
       }
-
       if (interaction.customId === "bet_category") {
         db.config.betCategoryId = channelId;
       }
 
       saveDatabase();
-
       return interaction.update({
         content: "✅ Configuração de canal salva.",
         components: []
       });
     }
-
     /* ----------------------------------------------------
        MODAIS
     ---------------------------------------------------- */
