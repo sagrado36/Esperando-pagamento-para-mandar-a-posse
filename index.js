@@ -371,11 +371,17 @@ function queueDescription(queue) {
   const filled = queue.players.length;
   const remaining = Math.max(total - filled, 0);
 
+  const playersText = filled
+    ? queue.players.map(id => `• <@${id}>`).join("\n")
+    : "• Aguardando jogadores...";
+
   return [
     `📱 **Modalidade:** ${modalityName(queue.modality)}`,
     `🎮 **Formato:** ${queue.format}`,
     `💰 **Valor:** ${money(queue.value)}`,
-    `👥 **Aguardando jogadores:** ${filled}/${total}`
+    "",
+    `👥 **Aguardando jogadores:** ${filled}/${total}`,
+    playersText
   ].join("\n");
 }
 
