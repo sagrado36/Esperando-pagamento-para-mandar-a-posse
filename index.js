@@ -274,7 +274,7 @@ function makeEmbed(title, description = "") {
   const result = new EmbedBuilder()
     .setColor(db.config.embedColor || "#5865F2")
     .setTitle(title)
-    .setDescription(description)
+    .setDescription(String(description).trim())
     .setFooter({ text: "🎮 Sistema de Apostas" })
     .setTimestamp();
 
@@ -367,32 +367,15 @@ function getQueue(format, modality, value, mode) {
 }
 
 function queueDescription(queue) {
-  const players = queue.players.length
-    ? queue.players.map((id, index) => `${index + 1}. <@${id}>`).join("\n")
-    : "🟢 Aguardando jogadores...";
-
-  const mode = queue.format === "1x1"
-    ? queue.mode === "gelo_infinito"
-      ? "♾️ Gelo Infinito"
-      : queue.mode === "gelo_normal"
-        ? "🧊 Gelo Normal"
-        : "🎮 Escolha o modo nos botões abaixo"
-    : "🎮 Partida padrão";
+  const total = requiredPlayers(queue.format);
+  const filled = queue.players.length;
+  const remaining = Math.max(total - filled, 0);
 
   return [
-    `🎯 **Formato:** ${queue.format}`,
     `📱 **Modalidade:** ${modalityName(queue.modality)}`,
-    `💰 **Valor por jogador:** ${money(queue.value)}`,
-    `⚙️ **Modo:** ${mode}`,
-    "",
-    "👥 **JOGADORES**",
-    players,
-    "",
-    `📊 **Vagas:** ${queue.players.length}/${requiredPlayers(queue.format)}`,
-    "",
-    queue.format === "1x1"
-      ? "⚡ **Como entrar:** escolha **Gelo Normal** ou **Gelo Infinito**.\n🚪 Use **Sair da fila** para remover sua participação."
-      : "⚡ **Como entrar:** clique em **Entrar na fila**.\n🚪 Use **Sair da fila** para remover sua participação."
+    `🎮 **Formato:** ${queue.format}`,
+    `💰 **Valor:** ${money(queue.value)}`,
+    `👥 **Aguardando jogadores:** ${filled}/${total}`
   ].join("\n");
 }
 
