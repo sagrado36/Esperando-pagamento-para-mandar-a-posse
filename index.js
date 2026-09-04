@@ -1887,7 +1887,7 @@ client.on("interactionCreate", async interaction => {
        MENUS DE CANAIS
     ---------------------------------------------------- */
 
-    if (interaction.isChannelSelectMenu()) {
+    if (interaction.isChannelSelectMenu() && interaction.customId !== "fila_setup_channel") {
       if (!(await requireAdmin(interaction))) return;
 
       const channelId = interaction.values[0];
