@@ -876,15 +876,18 @@ async function registerCommands() {
   const commands = [
     new SlashCommandBuilder()
       .setName("config")
-      .setDescription("Configura o sistema do bot."),
+      .setDescription("Configura o sistema do bot.")
+      .setDefaultMemberPermissions(null),
 
     new SlashCommandBuilder()
       .setName("fila")
-      .setDescription("Cria e publica as filas de apostas."),
+      .setDescription("Cria e publica as filas de apostas.")
+      .setDefaultMemberPermissions(null),
 
     new SlashCommandBuilder()
       .setName("cadastro")
       .setDescription("Cadastra os dados Pix de um usuário.")
+      .setDefaultMemberPermissions(null)
       .addUserOption(option =>
         option
           .setName("usuario")
@@ -1095,8 +1098,6 @@ client.on("interactionCreate", async interaction => {
     if (interaction.isChatInputCommand()) {
       /* /config */
       if (interaction.commandName === "config") {
-        if (!(await requireMediator(interaction))) return;
-
         return interaction.reply({
           embeds: [configEmbed()],
           components: configButtons(),
@@ -1106,8 +1107,6 @@ client.on("interactionCreate", async interaction => {
 
       /* /cadastro */
       if (interaction.commandName === "cadastro") {
-        if (!(await requireMediator(interaction))) return;
-
         const user = interaction.options.getUser("usuario");
 
         const modal = new ModalBuilder()
@@ -1149,10 +1148,6 @@ client.on("interactionCreate", async interaction => {
 
       /* /fila */
       if (interaction.commandName === "fila") {
-        if (!mediatorCheck(interaction)) {
-          return deny(interaction, "❌ Apenas Mediadores podem criar e publicar filas.");
-        }
-
         filaSetup.set(interaction.user.id, {
           format: null,
           modality: null,
