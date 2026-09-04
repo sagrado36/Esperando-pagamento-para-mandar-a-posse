@@ -174,6 +174,9 @@ function mergeDefaults(base, data) {
 
 let db = loadDatabase();
 
+// Configurações temporárias do comando /fila por usuário.
+const filaSetup = new Map();
+
 function saveDatabase() {
   fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2));
 }
@@ -1108,30 +1111,43 @@ client.on("interactionCreate", async interaction => {
           return deny(interaction, "❌ Apenas ADM pode criar e publicar filas.");
         }
 
-        const modal = new ModalBuilder()
-          .setCustomId("fila_start")
-          .setTitle("Criar fila");
+        filaSetup.set(interaction.user.id, {
+          format: null,
+          modality: null,
+          channelId: null
+        });
 
-        modal.addComponents(
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder()
-              .setCustomId("fila_value")
-              .setLabel("Valor")
-              .setPlaceholder("Ex.: 0,75")
-              .setStyle(TextInputStyle.Short)
-              .setRequired(true)
-          ),
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder()
-              .setCustomId("fila_channel")
-              .setLabel("ID do canal")
-              .setPlaceholder("ID do canal de publicação")
-              .setStyle(TextInputStyle.Short)
-              .setRequired(true)
-          )
-        );
-
-        return interaction.showModal(modal);
+        return interaction.reply({
+          content: "🎯 **Configuração da fila**\n\nEscolha o **formato**, a **modalidade** e o **canal onde a fila será publicada**.",
+          components: [
+            new ActionRowBuilder().addComponents(
+              new StringSelectMenuBuilder()
+                .setCustomId("fila_setup_format")
+                .setPlaceholder("1️⃣ Escolha o formato")
+                .addOptions(FORMATS.map(format => ({
+                  label: format,
+                  value: format,
+                  description: `${requiredPlayers(format)} jogadores necessários`
+                })))
+            ),
+            new ActionRowBuilder().addComponents(
+              new StringSelectMenuBuilder()
+                .setCustomId("fila_setup_modality")
+                .setPlaceholder("2️⃣ Escolha a modalidade")
+                .addOptions(MODALITIES.map(modality => ({
+                  label: modalityName(modality),
+                  value: modality
+                })))
+            ),
+            new ActionRowBuilder().addComponents(
+              new ChannelSelectMenuBuilder()
+                .setCustomId("fila_setup_channel")
+                .setPlaceholder("3️⃣ Escolha o canal de publicação")
+                .setChannelTypes(ChannelType.GuildText)
+            )
+          ],
+          ephemeral: true
+        });
       }
 
       /* /ssmob / /ssemu */
@@ -2194,247 +2210,8 @@ client.on("interactionCreate", async interaction => {
       }
 
       /* INÍCIO FILA */
-      if (interaction.customId === "fila_start") {
-        if (!(await requireAdmin(interaction))) return;
+      // O /fila utiliza os seletores abaixo para formato, modalidade e canal.
 
-        const value =
-          parseMoney(
-            interaction.fields.getTextInputValue("fila_value")
-          );
-
-        const channelId =
-          interaction.fields.getTextInputValue("fila_channel").trim();
-
-        if (!ALLOWED_VALUES.includes(value)) {
-          return deny(
-            interaction,
-            `❌ Valor inválido.\n\nValores permitidos:\n${ALLOWED_VALUES.map(money).join(" • ")}`
-          );
-        }
-
-        const channel =
-          await getChannel(interaction.guild, channelId);
-
-        if (!channel || !channel.isTextBased()) {
-          return deny(
-            interaction,
-            "❌ O ID informado não corresponde a um canal de texto."
-          );
-        }
-
-        return interaction.reply({
-          content: "🎯 Escolha o formato da fila:",
-          components: [
-            new ActionRowBuilder().addComponents(
-              new StringSelectMenuBuilder()
-                .setCustomId(`fila_format|${value}|${channelId}`)
-                .setPlaceholder("Selecionar formato")
-                .addOptions(
-                  FORMATS.map(format => ({
-                    label: format,
-                    value: format,
-                    description:
-                      `${requiredPlayers(format)} jogadores necessários`
-                  }))
-                )
-            )
-          ],
-          ephemeral: true
-        });
-      }
-
-      /* RESULTADO */
-      if (
-        interaction.customId.startsWith("result_normal|") ||
-        interaction.customId.startsWith("result_wo|")
-      ) {
-        if (!(await requireMediator(interaction))) return;
-
-        const [type, betId] =
-          interaction.customId.split("|");
-
-        const bet = db.bets[betId];
-
-        if (!bet) {
-          return deny(interaction, "❌ Aposta não encontrada.");
-        }
-
-        if (
-          bet.mediatorId &&
-          bet.mediatorId !== interaction.user.id
-        ) {
-          return deny(
-            interaction,
-            "❌ Você não é o Mediador responsável."
-          );
-        }
-
-        const winnerId =
-          interaction.fields.getTextInputValue("winner_id").trim();
-
-        if (!bet.players.includes(winnerId)) {
-          return deny(
-            interaction,
-            "❌ O vencedor precisa ser um dos jogadores da aposta."
-          );
-        }
-
-        if (bet.status === "result_registered") {
-          return deny(
-            interaction,
-            "❌ O resultado desta aposta já foi registrado."
-          );
-        }
-
-        const loserIds =
-          bet.players.filter(id => id !== winnerId);
-
-        const winnerStats = userStats(winnerId);
-
-        winnerStats.wins += 1;
-        winnerStats.coins += 1;
-
-        if (type === "result_wo") {
-          winnerStats.woWins += 1;
-        }
-
-        for (const loserId of loserIds) {
-          userStats(loserId).losses += 1;
-        }
-
-        bet.winnerId = winnerId;
-        bet.resultType =
-          type === "result_wo"
-            ? "W.O."
-            : "normal";
-        bet.status = "result_registered";
-        bet.resultAt = Date.now();
-
-        saveDatabase();
-
-        return interaction.reply({
-          embeds: [
-            makeEmbed(
-              "🏆 RESULTADO REGISTRADO",
-              [
-                `🏆 **Vencedor:** <@${winnerId}>`,
-                `🚫 **Tipo:** ${bet.resultType}`,
-                `🪙 **Coins ganhos:** +1`,
-                "",
-                loserIds.length
-                  ? `❌ **Perdedores:** ${loserIds.map(id => `<@${id}>`).join(", ")}`
-                  : "❌ **Perdedores:** nenhum"
-              ].join("\n")
-            )
-          ]
-        });
-      }
-
-      /* SALA */
-      if (interaction.customId.startsWith("room_modal|")) {
-        if (!(await requireMediator(interaction))) return;
-
-        const betId =
-          interaction.customId.split("|")[1];
-
-        const bet = db.bets[betId];
-
-        if (!bet) {
-          return deny(interaction, "❌ Aposta não encontrada.");
-        }
-
-        if (
-          bet.mediatorId &&
-          bet.mediatorId !== interaction.user.id
-        ) {
-          return deny(
-            interaction,
-            "❌ Você não é o Mediador responsável."
-          );
-        }
-
-        const roomId =
-          interaction.fields
-            .getTextInputValue("room_id")
-            .trim();
-
-        const roomPassword =
-          interaction.fields
-            .getTextInputValue("room_password")
-            .trim();
-
-        bet.roomId = roomId;
-        bet.roomPassword = roomPassword;
-        bet.roomCreatedAt = Date.now();
-
-        const roomEmbed = makeEmbed(
-          "🎮 SALA FREE FIRE",
-          [
-            `🆔 **ID da sala:** \`${roomId}\``,
-            `🔐 **Senha:** \`${roomPassword}\``,
-            "",
-            "⏱️ A sala será iniciada automaticamente entre **3 e 5 minutos**.",
-            "",
-            "Use os botões abaixo para copiar os dados."
-          ].join("\n")
-        );
-
-        await interaction.channel.send({
-          embeds: [roomEmbed],
-          components: [
-            new ActionRowBuilder().addComponents(
-              new ButtonBuilder()
-                .setCustomId(`room_copy_id|${betId}`)
-                .setLabel("Copiar ID")
-                .setEmoji("🆔")
-                .setStyle(ButtonStyle.Primary),
-
-              new ButtonBuilder()
-                .setCustomId(`room_copy_password|${betId}`)
-                .setLabel("Copiar Senha")
-                .setEmoji("🔐")
-                .setStyle(ButtonStyle.Secondary)
-            )
-          ]
-        });
-
-        saveDatabase();
-
-        const delay =
-          180000 +
-          Math.floor(Math.random() * 120000);
-
-        setTimeout(async () => {
-          const current = db.bets[betId];
-
-          if (!current || !current.channelId) return;
-
-          const channel =
-            await interaction.guild.channels
-              .fetch(current.channelId)
-              .catch(() => null);
-
-          if (!channel) return;
-
-          const total =
-            Number(current.value) * 2;
-
-          const safeValue =
-            valueId(total)
-              .replace(".", "-");
-
-          await channel.setName(
-            `sala-${safeValue}`.slice(0, 100)
-          ).catch(() => {});
-
-        }, delay);
-
-        return interaction.reply({
-          content:
-            "✅ ID e senha publicados. O início automático foi programado.",
-          ephemeral: true
-        });
-      }
     }
 
     /* ----------------------------------------------------
@@ -2442,95 +2219,80 @@ client.on("interactionCreate", async interaction => {
     ---------------------------------------------------- */
 
     if (interaction.isStringSelectMenu()) {
-      if (interaction.customId.startsWith("fila_format|")) {
+      if (interaction.customId === "fila_setup_format") {
         if (!(await requireAdmin(interaction))) return;
+        const setup = filaSetup.get(interaction.user.id) || { format: null, modality: null, channelId: null };
+        setup.format = interaction.values[0];
+        filaSetup.set(interaction.user.id, setup);
+        return interaction.deferUpdate();
+      }
 
-        const [, valueRaw, channelId] =
-          interaction.customId.split("|");
+      if (interaction.customId === "fila_setup_modality") {
+        if (!(await requireAdmin(interaction))) return;
+        const setup = filaSetup.get(interaction.user.id) || { format: null, modality: null, channelId: null };
+        setup.modality = interaction.values[0];
+        filaSetup.set(interaction.user.id, setup);
+        return interaction.deferUpdate();
+      }
 
-        const format = interaction.values[0];
-        const value = parseMoney(valueRaw);
+      if (interaction.customId === "fila_setup_channel") {
+        if (!(await requireAdmin(interaction))) return;
+        const setup = filaSetup.get(interaction.user.id) || { format: null, modality: null, channelId: null };
+        setup.channelId = interaction.values[0];
+        filaSetup.set(interaction.user.id, setup);
 
+        if (!setup.format || !setup.modality || !setup.channelId) {
+          return interaction.deferUpdate();
+        }
+
+        const channel = await getChannel(interaction.guild, setup.channelId);
+        if (!channel || !channel.isTextBased()) {
+          filaSetup.delete(interaction.user.id);
+          return interaction.update({ content: "❌ O canal selecionado é inválido.", components: [] });
+        }
+
+        const values = ALLOWED_VALUES.slice().sort((a, b) => b - a);
         return interaction.update({
-          content: "📱 Escolha a modalidade:",
+          content: `💰 **Escolha o valor da fila ${setup.format} — ${modalityName(setup.modality)}**\n\nOs valores são pré-definidos pelo sistema:`,
           components: [
             new ActionRowBuilder().addComponents(
               new StringSelectMenuBuilder()
-                .setCustomId(
-                  `fila_modality|${format}|${value}|${channelId}`
-                )
-                .setPlaceholder("Selecionar modalidade")
-                .addOptions(
-                  MODALITIES.map(modality => ({
-                    label: modalityName(modality),
-                    value: modality
-                  }))
-                )
+                .setCustomId(`fila_value_select|${setup.format}|${setup.modality}|${setup.channelId}`)
+                .setPlaceholder("Escolha o valor")
+                .addOptions(values.map(value => ({ label: money(value), value: String(value) })))
             )
           ]
         });
       }
 
-      if (interaction.customId.startsWith("fila_modality|")) {
+      if (interaction.customId.startsWith("fila_value_select|")) {
         if (!(await requireAdmin(interaction))) return;
-
-        const [, format, valueRaw, channelId] =
-          interaction.customId.split("|");
-
-        const modality = interaction.values[0];
-        const value = parseMoney(valueRaw);
-
-        const channel =
-          await getChannel(interaction.guild, channelId);
-
-        if (!channel || !channel.isTextBased()) {
-          return interaction.update({
-            content: "❌ Canal inválido.",
-            components: []
-          });
+        const [, format, modality, channelId] = interaction.customId.split("|");
+        const value = parseMoney(interaction.values[0]);
+        const channel = await getChannel(interaction.guild, channelId);
+        if (!channel || !channel.isTextBased() || !ALLOWED_VALUES.includes(value)) {
+          return interaction.update({ content: "❌ Configuração da fila inválida.", components: [] });
         }
 
         if (format === "1x1") {
           return interaction.update({
-            content: "🧊 Escolha o modo da fila 1x1:",
-            components:
-              queueOneVsOneModeComponents(
-                format,
-                modality,
-                value,
-                channelId
-              )
+            content: `🧊 **Escolha o modo da fila 1x1 — ${modalityName(modality)} — ${money(value)}**`,
+            components: queueOneVsOneModeComponents(format, modality, value, channelId)
           });
         }
 
-        const queue =
-          getQueue(
-            format,
-            modality,
-            value,
-            "normal"
-          );
-
+        const queue = getQueue(format, modality, value, "normal");
         queue.channelId = channel.id;
-
-        const message =
-          await channel.send({
-            embeds: [
-              makeEmbed(
-                `🎮 FILA ${format}`,
-                queueDescription(queue)
-              )
-            ],
-            components: queueComponents(queue)
-          });
-
+        const message = await channel.send({
+          embeds: [makeEmbed(`🎮 FILA ${format}`, queueDescription(queue))],
+          components: queueComponents(queue)
+        });
         queue.messageId = message.id;
-
         saveDatabase();
+        filaSetup.delete(interaction.user.id);
 
         return interaction.update({
-          content:
-            `✅ Fila ${format} — ${modalityName(modality)} — ${money(value)} publicada em ${channel}.`,
+          content: `✅ Fila ${format} — ${modalityName(modality)} — ${money(value)} publicada em ${channel}.`,
           components: []
         });
       }
