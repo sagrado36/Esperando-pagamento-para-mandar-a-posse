@@ -16,12 +16,10 @@ COMANDOS:
   /config
   /fila
   /cadastro
-  /ssmob
-  /ssemu
-  /med
-  /p
   .ssmob
   .ssemu
+  .med
+  .p
 
 REGRAS:
   - Embeds organizadas e autoexplicativas.
@@ -225,8 +223,9 @@ function formatName(format) {
 }
 
 function requiredPlayers(format) {
-  const number = Number(format[0]);
-  return number * 2;
+  // Toda fila representa uma aposta entre exatamente 2 jogadores,
+  // independentemente do formato da partida.
+  return 2;
 }
 
 function userStats(userId) {
@@ -877,35 +876,21 @@ async function registerCommands() {
   const commands = [
     new SlashCommandBuilder()
       .setName("config")
-      .setDescription("Configura o sistema do bot.")
-      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+      .setDescription("Configura o sistema do bot."),
 
     new SlashCommandBuilder()
       .setName("fila")
-      .setDescription("Cria uma fila de apostas."),
+      .setDescription("Cria e publica as filas de apostas."),
 
     new SlashCommandBuilder()
       .setName("cadastro")
       .setDescription("Cadastra os dados Pix de um usuário.")
-      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
       .addUserOption(option =>
         option
           .setName("usuario")
           .setDescription("Usuário que receberá o cadastro Pix.")
           .setRequired(true)
-      ),
-
-    new SlashCommandBuilder()
-      .setName("ssmob")
-      .setDescription("Solicita uma análise Mobile."),
-
-    new SlashCommandBuilder()
-      .setName("ssemu")
-      .setDescription("Solicita uma análise Emulador."),
-
-    new SlashCommandBuilder()
-      .setName("p")
-      .setDescription("Mostra suas estatísticas.")
+      )
   ].map(command => command.toJSON());
 
   const rest = new REST({ version: "10" }).setToken(TOKEN);
@@ -1074,6 +1059,24 @@ client.on("messageCreate", async message => {
         components: mediatorControlButtons(bet.id)
       });
     }
+    if (command === ".p") {
+      const stats = userStats(message.author.id);
+
+      return message.reply({
+        embeds: [
+          makeEmbed(
+            `📊 ESTATÍSTICAS — ${message.author.username}`,
+            [
+              `🏆 **Vitórias:** ${stats.wins}`,
+              `💔 **Derrotas:** ${stats.losses}`,
+              `⚡ **Vitórias por W.O.:** ${stats.woWins}`,
+              `🪙 **Coins:** ${stats.coins}`
+            ].join("\n")
+          )
+        ]
+      });
+    }
+
   } catch (error) {
     console.error("❌ Erro no comando prefixado:", error);
   }
@@ -1092,7 +1095,7 @@ client.on("interactionCreate", async interaction => {
     if (interaction.isChatInputCommand()) {
       /* /config */
       if (interaction.commandName === "config") {
-        if (!(await requireAdmin(interaction))) return;
+        if (!(await requireMediator(interaction))) return;
 
         return interaction.reply({
           embeds: [configEmbed()],
@@ -1103,7 +1106,7 @@ client.on("interactionCreate", async interaction => {
 
       /* /cadastro */
       if (interaction.commandName === "cadastro") {
-        if (!(await requireAdmin(interaction))) return;
+        if (!(await requireMediator(interaction))) return;
 
         const user = interaction.options.getUser("usuario");
 
@@ -1146,8 +1149,8 @@ client.on("interactionCreate", async interaction => {
 
       /* /fila */
       if (interaction.commandName === "fila") {
-        if (!adminCheck(interaction)) {
-          return deny(interaction, "❌ Apenas ADM pode criar e publicar filas.");
+        if (!mediatorCheck(interaction)) {
+          return deny(interaction, "❌ Apenas Mediadores podem criar e publicar filas.");
         }
 
         filaSetup.set(interaction.user.id, {
@@ -1157,7 +1160,7 @@ client.on("interactionCreate", async interaction => {
         });
 
         return interaction.reply({
-          content: "🎯 **Configuração da fila**\n\nEscolha o **formato**, a **modalidade** e o **canal onde a fila será publicada**.",
+          content: "🎯 **Configuração da fila**\n\nEscolha somente o **formato**, a **modalidade** e o **canal onde todas as filas serão publicadas**.",
           components: [
             new ActionRowBuilder().addComponents(
               new StringSelectMenuBuilder()
@@ -1166,7 +1169,7 @@ client.on("interactionCreate", async interaction => {
                 .addOptions(FORMATS.map(format => ({
                   label: format,
                   value: format,
-                  description: `${requiredPlayers(format)} jogadores necessários`
+                  description: "Fila para 2 jogadores"
                 })))
             ),
             new ActionRowBuilder().addComponents(
@@ -1189,165 +1192,9 @@ client.on("interactionCreate", async interaction => {
         });
       }
 
-      /* /ssmob / /ssemu */
-      if (
-        interaction.commandName === "ssmob" ||
-        interaction.commandName === "ssemu"
-      ) {
-        const type =
-          interaction.commandName === "ssmob"
-            ? "Mobile"
-            : "Emulador";
 
-        const channelId =
-          type === "Mobile"
-            ? db.config.ssmobChannelId
-            : db.config.ssemuChannelId;
 
-        if (!channelId) {
-          return deny(
-            interaction,
-            "❌ O canal desta análise ainda não foi configurado."
-          );
-        }
 
-        const channel = await getChannel(interaction.guild, channelId);
-
-        if (!channel || !channel.isTextBased()) {
-          return deny(interaction, "❌ Canal de análise inválido.");
-        }
-
-        const id =
-          `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-        db.analyses[id] = {
-          id,
-          guildId: interaction.guild.id,
-          requesterId: interaction.user.id,
-          type,
-          analystId: null,
-          status: "pending",
-          createdAt: Date.now()
-        };
-
-        await channel.send({
-          embeds: [
-            makeEmbed(
-              "🔎 SOLICITAÇÃO DE ANÁLISE",
-              [
-                `📱 **Modalidade:** ${type}`,
-                `👤 **Solicitante:** <@${interaction.user.id}>`,
-                "",
-                "⏳ Aguardando um Analista.",
-                "Clique no botão para assumir."
-              ].join("\n")
-            )
-          ],
-          components: [
-            new ActionRowBuilder().addComponents(
-              new ButtonBuilder()
-                .setCustomId(`analysis_take|${id}`)
-                .setLabel("Assumir análise")
-                .setEmoji("🔎")
-                .setStyle(ButtonStyle.Success)
-            )
-          ]
-        });
-
-        saveDatabase();
-
-        return interaction.reply({
-          content: `✅ Solicitação ${type} enviada.`,
-          ephemeral: true
-        });
-      }
-
-      /* /med */
-      if (interaction.commandName === "med") {
-        if (!(await requireMediator(interaction))) return;
-
-        const pending = Object.values(db.bets).find(
-          bet =>
-            bet.guildId === interaction.guild.id &&
-            (bet.status === "waiting_mediator" ||
-              bet.status === "waiting_confirmation") &&
-            !bet.mediatorId
-        );
-
-        if (!pending) {
-          return deny(
-            interaction,
-            "❌ Não existe aposta aguardando Mediador."
-          );
-        }
-
-        const assigned = await distributeMediator(
-          pending,
-          interaction.guild
-        );
-
-        if (!assigned) {
-          return deny(
-            interaction,
-            "❌ Não há Mediador disponível."
-          );
-        }
-
-        pending.status = "waiting_confirmation";
-
-        const channel = await getChannel(
-          interaction.guild,
-          pending.channelId
-        );
-
-        if (channel) {
-          await channel.permissionOverwrites.edit(
-            interaction.user.id,
-            {
-              ViewChannel: true,
-              SendMessages: true,
-              ReadMessageHistory: true,
-              ManageChannels: true
-            }
-          ).catch(() => {});
-
-          await channel.send({
-            embeds: [
-              makeEmbed(
-                "👨‍⚖️ MEDIADOR ATRIBUÍDO",
-                `O Mediador responsável é <@${pending.mediatorId}>.`
-              )
-            ],
-            components: mediatorControlButtons(pending.id)
-          });
-        }
-
-        saveDatabase();
-
-        return interaction.reply({
-          content: `✅ Aposta ${pending.id} atribuída ao Mediador <@${pending.mediatorId}>.`,
-          ephemeral: true
-        });
-      }
-
-      /* /p */
-      if (interaction.commandName === "p") {
-        const stats = userStats(interaction.user.id);
-
-        return interaction.reply({
-          embeds: [
-            makeEmbed(
-              `📊 ESTATÍSTICAS — ${interaction.user.username}`,
-              [
-                `🏆 **Vitórias:** ${stats.wins}`,
-                `❌ **Derrotas:** ${stats.losses}`,
-                `🚫 **Vitórias por W.O.:** ${stats.woWins}`,
-                `🪙 **Coins:** ${stats.coins}`
-              ].join("\n")
-            )
-          ]
-        });
-      }
     }
 
     /* ----------------------------------------------------
@@ -2330,6 +2177,50 @@ client.on("interactionCreate", async interaction => {
        SELECTS
     ---------------------------------------------------- */
 
+    if (interaction.isChannelSelectMenu() && interaction.customId === "fila_setup_channel") {
+      if (!(await requireAdmin(interaction))) return;
+      const setup = filaSetup.get(interaction.user.id) || { format: null, modality: null, channelId: null };
+      setup.channelId = interaction.values[0];
+      filaSetup.set(interaction.user.id, setup);
+
+      if (!setup.format || !setup.modality || !setup.channelId) {
+        return interaction.deferUpdate();
+      }
+
+      const channel = await getChannel(interaction.guild, setup.channelId);
+      if (!channel || !channel.isTextBased()) {
+        filaSetup.delete(interaction.user.id);
+        return interaction.update({ content: "❌ O canal selecionado é inválido.", components: [] });
+      }
+
+      const values = ALLOWED_VALUES.slice().sort((a, b) => b - a);
+      const published = [];
+
+      try {
+        for (const value of values) {
+          const modes = setup.format === "1x1" ? ["gelo_normal", "gelo_infinito"] : ["normal"];
+          for (const mode of modes) {
+            const queue = getQueue(setup.format, setup.modality, value, mode);
+            queue.channelId = channel.id;
+            queue.guildId = interaction.guild.id;
+            let msg = queue.messageId ? await channel.messages.fetch(queue.messageId).catch(() => null) : null;
+            const payload = { embeds: [makeEmbed(`🎮 FILA ${setup.format}`, queueDescription(queue))], components: queueComponents(queue) };
+            if (msg) await msg.edit(payload);
+            else { msg = await channel.send(payload); queue.messageId = msg.id; }
+            published.push(money(value));
+          }
+        }
+      } catch (error) {
+        console.error("❌ Erro ao publicar as filas:", error);
+        filaSetup.delete(interaction.user.id);
+        return interaction.update({ content: `❌ Não foi possível publicar as filas no canal selecionado. Verifique as permissões do bot.\n\nDetalhe: ${error.message || "erro desconhecido"}`, components: [] });
+      }
+
+      saveDatabase();
+      filaSetup.delete(interaction.user.id);
+      return interaction.update({ content: `✅ **Todas as filas foram publicadas!**\n\n📌 **Canal:** ${channel}\n🎮 **Formato:** ${setup.format}\n📱 **Modalidade:** ${modalityName(setup.modality)}\n💰 **Valores:** ${values.map(money).join(", ")}\n👥 **Limite por fila:** 2 jogadores`, components: [] });
+    }
+
     if (interaction.isStringSelectMenu()) {
       if (interaction.customId === "fila_setup_format") {
         if (!(await requireAdmin(interaction))) return;
@@ -2363,48 +2254,57 @@ client.on("interactionCreate", async interaction => {
           return interaction.update({ content: "❌ O canal selecionado é inválido.", components: [] });
         }
 
+        // Publica AUTOMATICAMENTE todas as filas pré-definidas.
+        // O ADM escolhe apenas formato, modalidade e canal.
         const values = ALLOWED_VALUES.slice().sort((a, b) => b - a);
-        return interaction.update({
-          content: `💰 **Escolha o valor da fila ${setup.format} — ${modalityName(setup.modality)}**\n\nOs valores são pré-definidos pelo sistema:`,
-          components: [
-            new ActionRowBuilder().addComponents(
-              new StringSelectMenuBuilder()
-                .setCustomId(`fila_value_select|${setup.format}|${setup.modality}|${setup.channelId}`)
-                .setPlaceholder("Escolha o valor")
-                .addOptions(values.map(value => ({ label: money(value), value: String(value) })))
-            )
-          ]
-        });
-      }
+        const published = [];
 
-      if (interaction.customId.startsWith("fila_value_select|")) {
-        if (!(await requireAdmin(interaction))) return;
-        const [, format, modality, channelId] = interaction.customId.split("|");
-        const value = parseMoney(interaction.values[0]);
-        const channel = await getChannel(interaction.guild, channelId);
-        if (!channel || !channel.isTextBased() || !ALLOWED_VALUES.includes(value)) {
-          return interaction.update({ content: "❌ Configuração da fila inválida.", components: [] });
-        }
+        try {
+          for (const value of values) {
+            const modes = setup.format === "1x1"
+              ? ["gelo_normal", "gelo_infinito"]
+              : ["normal"];
 
-        if (format === "1x1") {
+            for (const mode of modes) {
+              const queue = getQueue(setup.format, setup.modality, value, mode);
+              queue.channelId = channel.id;
+              queue.guildId = interaction.guild.id;
+
+              let sentMessage = null;
+              if (queue.messageId) {
+                sentMessage = await channel.messages.fetch(queue.messageId).catch(() => null);
+              }
+
+              if (sentMessage) {
+                await sentMessage.edit({
+                  embeds: [makeEmbed(`🎮 FILA ${setup.format}`, queueDescription(queue))],
+                  components: queueComponents(queue)
+                });
+              } else {
+                sentMessage = await channel.send({
+                  embeds: [makeEmbed(`🎮 FILA ${setup.format}`, queueDescription(queue))],
+                  components: queueComponents(queue)
+                });
+                queue.messageId = sentMessage.id;
+              }
+
+              published.push(`${money(value)}${setup.format === "1x1" ? ` — ${mode === "gelo_infinito" ? "Gelo Infinito" : "Gelo Normal"}` : ""}`);
+            }
+          }
+        } catch (error) {
+          console.error("❌ Erro ao publicar as filas:", error);
+          filaSetup.delete(interaction.user.id);
           return interaction.update({
-            content: `🧊 **Escolha o modo da fila 1x1 — ${modalityName(modality)} — ${money(value)}**`,
-            components: queueOneVsOneModeComponents(format, modality, value, channelId)
+            content: `❌ Não foi possível publicar as filas no canal selecionado. Verifique se o bot tem permissão para **Ver Canal**, **Enviar Mensagens** e **Incorporar Links**.\n\nDetalhe: ${error.message || "erro desconhecido"}`,
+            components: []
           });
         }
 
-        const queue = getQueue(format, modality, value, "normal");
-        queue.channelId = channel.id;
-        const message = await channel.send({
-          embeds: [makeEmbed(`🎮 FILA ${format}`, queueDescription(queue))],
-          components: queueComponents(queue)
-        });
-        queue.messageId = message.id;
         saveDatabase();
         filaSetup.delete(interaction.user.id);
 
         return interaction.update({
-          content: `✅ Fila ${format} — ${modalityName(modality)} — ${money(value)} publicada em ${channel}.`,
+          content: `✅ **Todas as filas foram publicadas!**\n\n📌 **Canal:** ${channel}\n🎮 **Formato:** ${setup.format}\n📱 **Modalidade:** ${modalityName(setup.modality)}\n💰 **Valores:** ${values.map(money).join(", ")}\n👥 **Limite por fila:** 2 jogadores`,
           components: []
         });
       }
