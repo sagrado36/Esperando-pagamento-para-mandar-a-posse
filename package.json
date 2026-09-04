@@ -1,7 +1,7 @@
 {
-  "name": "discord-free-fire-bot",
+  "name": "bot-de-apostado",
   "version": "1.0.0",
-  "description": "Bot de filas e apostas Free Fire para Discord",
+  "description": "Bot Discord de filas, apostas, mediadores, analistas, PIX, Coins e estatísticas",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -11,6 +11,6 @@
   },
   "dependencies": {
     "discord.js": "^14.25.1",
-    "dotenv": "^16.6.1"
+    "dotenv": "^17.2.1"
   }
 }
