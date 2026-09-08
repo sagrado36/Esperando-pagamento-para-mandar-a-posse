@@ -247,25 +247,18 @@ function configEmbed() {
   return makeEmbed(
     "⚙️ CONFIGURAÇÃO DO BOT",
     [
-      "Configure o sistema usando os botões abaixo.",
+      "Use os botões abaixo para configurar cada parte do sistema.",
       "",
-      "🛡️ **EQUIPE**",
-      `• Mediador: ${c.mediatorRoleId ? `<@&${c.mediatorRoleId}>` : "❌ Não configurado"}`,
-      `• Analista: ${c.analystRoleId ? `<@&${c.analystRoleId}>` : "❌ Não configurado"}`,
-      `• Administradores: **${c.admins.length}/20**`,
-      "",
-      "💰 **APOSTAS**",
-      `• Taxa: **${money(c.fee)}**`,
-      `• Categoria: ${c.betCategoryId ? `<#${c.betCategoryId}>` : "❌ Não configurada"}`,
-      "",
-      "📢 **CANAIS**",
-      `• Mobile: ${c.ssmobChannelId ? `<#${c.ssmobChannelId}>` : "❌ Não configurado"}`,
-      `• Emulador: ${c.ssemuChannelId ? `<#${c.ssemuChannelId}>` : "❌ Não configurado"}`,
-      `• Fila de Mediadores: ${c.mediatorQueueChannelId ? `<#${c.mediatorQueueChannelId}>` : "❌ Não configurada"}`,
-      "",
-      "🎨 **APARÊNCIA**",
-      `• Cor: \`${c.embedColor}\``,
-      `• Foto do bot: ${c.profileImage ? "✅ Configurada" : "❌ Não configurada"}`
+      `👤 **Mediador:** ${c.mediatorRoleId ? `<@&${c.mediatorRoleId}>` : "Não configurado"}`,
+      `🔎 **Analista:** ${c.analystRoleId ? `<@&${c.analystRoleId}>` : "Não configurado"}`,
+      `👑 **ADMs:** ${c.admins.length}/20`,
+      `💰 **Taxa:** ${money(c.fee)}`,
+      `🎨 **Cor:** \`${c.embedColor}\``,
+      `🖼️ **Foto:** ${c.profileImage ? "Configurada" : "Não configurada"}`,
+      `📱 **Canal Mobile:** ${c.ssmobChannelId ? `<#${c.ssmobChannelId}>` : "Não configurado"}`,
+      `🖥️ **Canal Emulador:** ${c.ssemuChannelId ? `<#${c.ssemuChannelId}>` : "Não configurado"}`,
+      `👨‍⚖️ **Fila de Mediadores:** ${c.mediatorQueueChannelId ? `<#${c.mediatorQueueChannelId}>` : "Não configurada"}`,
+      `📁 **Categoria das apostas:** ${c.betCategoryId ? `<#${c.betCategoryId}>` : "Não configurada"}`
     ].join("\n")
   );
 }
@@ -274,8 +267,7 @@ function makeEmbed(title, description = "") {
   const result = new EmbedBuilder()
     .setColor(db.config.embedColor || "#5865F2")
     .setTitle(title)
-    .setDescription(String(description).trim())
-    .setFooter({ text: "🎮 Sistema de Apostas" })
+    .setDescription(description)
     .setTimestamp();
 
   if (db.config.profileImage && validUrl(db.config.profileImage)) {
@@ -367,21 +359,28 @@ function getQueue(format, modality, value, mode) {
 }
 
 function queueDescription(queue) {
-  const total = requiredPlayers(queue.format);
-  const filled = queue.players.length;
-  const remaining = Math.max(total - filled, 0);
+  const players = queue.players.length
+    ? queue.players.map((id, index) => `${index + 1}. <@${id}>`).join("\n")
+    : "A fila está vazia.";
 
-  const playersText = filled
-    ? queue.players.map(id => `• <@${id}>`).join("\n")
-    : "• Aguardando jogadores...";
+  const mode = queue.format === "1x1"
+    ? queue.mode === "gelo_infinito"
+      ? "Gelo Infinito"
+      : "Gelo Normal"
+    : "Partida padrão";
 
   return [
-    `📱 **Modalidade:** ${modalityName(queue.modality)}`,
     `🎮 **Formato:** ${queue.format}`,
+    `📱 **Modalidade:** ${modalityName(queue.modality)}`,
     `💰 **Valor:** ${money(queue.value)}`,
+    `🧊 **Modo:** ${mode}`,
     "",
-    `👥 **Aguardando jogadores:** ${filled}/${total}`,
-    playersText
+    "👥 **Jogadores:**",
+    players,
+    "",
+    `📌 **Vagas preenchidas:** ${queue.players.length}/${requiredPlayers(queue.format)}`,
+    "",
+    "Escolha uma opção abaixo para entrar ou sair."
   ].join("\n");
 }
 
@@ -390,15 +389,10 @@ function queueComponents(queue) {
     return [
       new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-          .setCustomId(`queue_join|${queue.id}|gelo_normal`)
-          .setLabel("Gelo Normal")
-          .setEmoji("🧊")
-          .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-          .setCustomId(`queue_join|${queue.id}|gelo_infinito`)
-          .setLabel("Gelo Infinito")
-          .setEmoji("♾️")
-          .setStyle(ButtonStyle.Primary),
+          .setCustomId(`queue_join|${queue.id}`)
+          .setLabel("Entrar")
+          .setEmoji("➕")
+          .setStyle(ButtonStyle.Success),
         new ButtonBuilder()
           .setCustomId(`queue_leave|${queue.id}`)
           .setLabel("Sair da fila")
@@ -413,7 +407,7 @@ function queueComponents(queue) {
       new ButtonBuilder()
         .setCustomId(`queue_join|${queue.id}`)
         .setLabel("Entrar na fila")
-        .setEmoji("🎮")
+        .setEmoji("➕")
         .setStyle(ButtonStyle.Success),
       new ButtonBuilder()
         .setCustomId(`queue_leave|${queue.id}`)
@@ -431,7 +425,7 @@ function queueOneVsOneModeComponents(format, modality, value, channelId) {
         .setCustomId(`publish_queue|${format}|${modality}|${value}|gelo_normal|${channelId}`)
         .setLabel("Gelo Normal")
         .setEmoji("🧊")
-        .setStyle(ButtonStyle.Secondary),
+        .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
         .setCustomId(`publish_queue|${format}|${modality}|${value}|gelo_infinito|${channelId}`)
         .setLabel("Gelo Infinito")
@@ -444,25 +438,26 @@ function queueOneVsOneModeComponents(format, modality, value, channelId) {
 function mediatorQueueEmbed() {
   const list = db.mediatorQueue.length
     ? db.mediatorQueue.map((id, index) => `${index + 1}. <@${id}>`).join("\n")
-    : "🟢 Nenhum Mediador está aguardando.";
+    : "Nenhum Mediador está na fila.";
 
-  const next = db.mediatorQueue.length > 0
-    ? db.mediatorQueue[db.mediatorRotation % db.mediatorQueue.length]
-    : null;
+  const next =
+    db.mediatorQueue.length > 0
+      ? db.mediatorQueue[db.mediatorRotation % db.mediatorQueue.length]
+      : null;
 
   return makeEmbed(
     "👨‍⚖️ FILA DE MEDIADORES",
     [
-      "Mediadores disponíveis para receber novas apostas.",
+      "Somente usuários com o cargo **Mediador** podem participar.",
       "",
-      "📋 **ORDEM DE ATENDIMENTO**",
+      "📋 **Ordem atual:**",
       list,
       "",
       next
-        ? `🎯 **Próximo Mediador:** <@${next}>`
-        : "🎯 **Próximo Mediador:** nenhum",
+        ? `🎯 **Próximo do rodízio:** <@${next}>`
+        : "🎯 **Próximo do rodízio:** nenhum",
       "",
-      "🔄 A distribuição segue automaticamente a ordem da fila."
+      "O sistema utiliza rodízio automático para distribuir as partidas."
     ].join("\n")
   );
 }
@@ -534,25 +529,22 @@ async function updateMediatorQueueMessage(guild) {
 
 function betEmbed(bet) {
   return makeEmbed(
-    "🎮 APOSTA INICIADA",
+    "🎮 APOSTA",
     [
-      "Os jogadores foram encontrados e a aposta foi criada.",
+      `🎯 **Formato:** ${bet.format}`,
+      `📱 **Modalidade:** ${modalityName(bet.modality)}`,
+      `💰 **Valor:** ${money(bet.value)}`,
+      `🧊 **Modo:** ${bet.mode === "gelo_infinito" ? "Gelo Infinito" : "Gelo Normal"}`,
       "",
-      "📌 **DADOS DA APOSTA**",
-      `• Formato: **${bet.format}**`,
-      `• Modalidade: **${modalityName(bet.modality)}**`,
-      `• Valor por jogador: **${money(bet.value)}**`,
-      `• Modo: **${bet.mode === "gelo_infinito" ? "♾️ Gelo Infinito" : "🧊 Gelo Normal"}**`,
-      "",
-      "👥 **JOGADORES**",
-      bet.players.map((id, index) => `${index + 1}. <@${id}>`).join("\n"),
+      "👥 **Jogadores:**",
+      bet.players.map(id => `• <@${id}>`).join("\n"),
       "",
       bet.mediatorId
         ? `👨‍⚖️ **Mediador:** <@${bet.mediatorId}>`
         : "👨‍⚖️ **Mediador:** aguardando distribuição",
       "",
-      "✅ Cada jogador deve confirmar a aposta abaixo.",
-      "❌ Se alguém cancelar, a aposta será encerrada."
+      "Cada jogador deve confirmar a aposta.",
+      "Se alguém cancelar, o canal será excluído em 5 segundos."
     ].join("\n")
   );
 }
@@ -608,16 +600,13 @@ function paymentEmbed(bet) {
 
   if (!entries.length) {
     return makeEmbed(
-      "💳 PAGAMENTO VIA PIX",
+      "💳 PAGAMENTO",
       [
-        "Os dois jogadores confirmaram a aposta.",
+        `💰 **Valor da aposta:** ${money(bet.value)}`,
+        `🏆 **Valor total:** ${money(bet.value * 2)}`,
         "",
-        `💰 **Valor por jogador:** ${money(bet.value)}`,
-        `🏆 **Total da aposta:** ${money(bet.value * 2)}`,
-        "",
-        "⚠️ **PIX NÃO CONFIGURADO**",
-        "Nenhum ADM possui cadastro Pix.",
-        "Um ADM deve usar `/cadastro` para cadastrar os dados de pagamento."
+        "⚠️ Nenhum cadastro Pix foi configurado ainda.",
+        "Um ADM deve usar `/cadastro` para cadastrar os dados."
       ].join("\n")
     );
   }
@@ -627,17 +616,13 @@ function paymentEmbed(bet) {
   const result = makeEmbed(
     "💳 PAGAMENTO VIA PIX",
     [
-      "Os dois jogadores confirmaram a aposta. Realize o pagamento abaixo e aguarde o Mediador.",
+      `💰 **Valor de cada jogador:** ${money(bet.value)}`,
+      `🏆 **Total da aposta:** ${money(bet.value * 2)}`,
       "",
-      "💰 **VALORES**",
-      `• Cada jogador: **${money(bet.value)}**`,
-      `• Total da aposta: **${money(bet.value * 2)}**`,
+      `👤 **Nome:** ${pix.name}`,
+      `🔑 **Chave Pix:** \`${pix.key}\``,
       "",
-      "👤 **RESPONSÁVEL PELO PIX**",
-      `• Nome: **${pix.name}**`,
-      `• Chave Pix: \`${pix.key}\``,
-      "",
-      "📌 Após pagar, não envie comprovante no chat sem orientação do Mediador."
+      "Após realizar o pagamento, aguarde o Mediador."
     ].join("\n")
   );
 
@@ -747,7 +732,6 @@ async function createBetFromQueue(interaction, queue) {
   }
 
   const players = queue.players.splice(0, needed);
-  const matchMode = queue.mode;
 
   const id =
     `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -759,7 +743,7 @@ async function createBetFromQueue(interaction, queue) {
     format: queue.format,
     modality: queue.modality,
     value: queue.value,
-    mode: matchMode,
+    mode: queue.mode,
     players,
     mediatorId: null,
     confirmedBy: [],
@@ -770,8 +754,6 @@ async function createBetFromQueue(interaction, queue) {
     roomPassword: null,
     createdAt: Date.now()
   };
-
-  if (queue.format === "1x1") queue.mode = "choice";
 
   db.bets[id] = bet;
 
@@ -1463,7 +1445,6 @@ client.on("interactionCreate", async interaction => {
       /* FILA */
       if (action === "queue_join") {
         const queue = db.queues[parts[0]];
-        const selectedMode = parts[1] || null;
 
         if (!queue) {
           return deny(interaction, "❌ Esta fila não existe mais.");
@@ -1487,21 +1468,6 @@ client.on("interactionCreate", async interaction => {
           );
         }
 
-        if (queue.format === "1x1") {
-          if (!["gelo_normal", "gelo_infinito"].includes(selectedMode)) {
-            return deny(interaction, "❌ Escolha Gelo Normal ou Gelo Infinito.");
-          }
-
-          if (queue.players.length > 0 && queue.mode !== selectedMode) {
-            return deny(
-              interaction,
-              `❌ Esta fila já está configurada para **${queue.mode === "gelo_infinito" ? "Gelo Infinito" : "Gelo Normal"}**. Escolha o mesmo modo do primeiro jogador.`
-            );
-          }
-
-          queue.mode = selectedMode;
-        }
-
         queue.players.push(interaction.user.id);
 
         const bet =
@@ -1518,8 +1484,6 @@ client.on("interactionCreate", async interaction => {
             ephemeral: true
           });
         }
-
-        await refreshQueueMessage(queue, interaction.guild);
 
         await interaction.reply({
           content:
@@ -1544,7 +1508,6 @@ client.on("interactionCreate", async interaction => {
         );
 
         saveDatabase();
-        await refreshQueueMessage(queue, interaction.guild);
 
         return interaction.reply({
           content:
@@ -1927,115 +1890,32 @@ client.on("interactionCreate", async interaction => {
     if (interaction.isChannelSelectMenu()) {
       if (!(await requireAdmin(interaction))) return;
 
-      if (interaction.customId === "fila_setup_channel") {
-        const setup = filaSetup.get(interaction.user.id) || {
-          format: null,
-          modality: null,
-          channelId: null
-        };
-        setup.channelId = interaction.values[0];
-        filaSetup.set(interaction.user.id, setup);
-
-        if (!setup.format || !setup.modality) {
-          return interaction.deferUpdate();
-        }
-
-        // Confirma imediatamente a seleção para não deixar a interação expirar.
-        await interaction.deferUpdate();
-
-        const channel = await getChannel(interaction.guild, setup.channelId);
-        if (!channel || !channel.isTextBased() || typeof channel.send !== "function") {
-          filaSetup.delete(interaction.user.id);
-          return interaction.editReply({
-            content: "❌ O canal selecionado é inválido ou não permite o envio de mensagens.",
-            components: []
-          });
-        }
-
-        const values = ALLOWED_VALUES.slice().sort((a, b) => b - a);
-
-        try {
-          for (const value of values) {
-            // 1x1 = uma fila por valor, com exatamente 3 botões.
-            const modes = setup.format === "1x1" ? ["choice"] : ["normal"];
-
-            for (const mode of modes) {
-              const queue = getQueue(setup.format, setup.modality, value, mode);
-              queue.channelId = channel.id;
-              queue.guildId = interaction.guild.id;
-
-              let message = queue.messageId
-                ? await channel.messages.fetch(queue.messageId).catch(() => null)
-                : null;
-
-              const payload = {
-                embeds: [makeEmbed(`🎮 FILA ${setup.format}`, queueDescription(queue))],
-                components: queueComponents(queue)
-              };
-
-              if (message) {
-                await message.edit(payload);
-              } else {
-                message = await channel.send(payload);
-                queue.messageId = message.id;
-              }
-            }
-          }
-
-          saveDatabase();
-          filaSetup.delete(interaction.user.id);
-
-          return interaction.editReply({
-            content: [
-              "✅ **FILAS PUBLICADAS COM SUCESSO!**",
-              "",
-              `📌 **Canal:** ${channel}`,
-              `🎮 **Formato:** ${setup.format}`,
-              `📱 **Modalidade:** ${modalityName(setup.modality)}`,
-              `💰 **Valores:** ${values.map(money).join(", ")}`,
-              "",
-              "📋 As filas já estão disponíveis no canal escolhido."
-            ].join("\n"),
-            components: []
-          });
-        } catch (error) {
-          console.error("❌ Erro ao publicar as filas pelo /fila:", error);
-          filaSetup.delete(interaction.user.id);
-
-          return interaction.editReply({
-            content: [
-              "❌ **NÃO FOI POSSÍVEL PUBLICAR AS FILAS.**",
-              "",
-              "Verifique as permissões do bot no canal escolhido: Ver Canal, Enviar Mensagens, Inserir Links e Usar Componentes.",
-              "",
-              `Detalhe técnico: ${error?.message || "erro desconhecido"}`
-            ].join("\n"),
-            components: []
-          });
-        }
-      }
-
       const channelId = interaction.values[0];
 
       if (interaction.customId === "channel_ssmob") {
         db.config.ssmobChannelId = channelId;
       }
+
       if (interaction.customId === "channel_ssemu") {
         db.config.ssemuChannelId = channelId;
       }
+
       if (interaction.customId === "channel_mediator_queue") {
         db.config.mediatorQueueChannelId = channelId;
       }
+
       if (interaction.customId === "bet_category") {
         db.config.betCategoryId = channelId;
       }
 
       saveDatabase();
+
       return interaction.update({
         content: "✅ Configuração de canal salva.",
         components: []
       });
     }
+
     /* ----------------------------------------------------
        MODAIS
     ---------------------------------------------------- */
@@ -2313,7 +2193,7 @@ client.on("interactionCreate", async interaction => {
 
       try {
         for (const value of values) {
-          const modes = setup.format === "1x1" ? ["choice"] : ["normal"];
+          const modes = setup.format === "1x1" ? ["gelo_normal", "gelo_infinito"] : ["normal"];
           for (const mode of modes) {
             const queue = getQueue(setup.format, setup.modality, value, mode);
             queue.channelId = channel.id;
@@ -2377,7 +2257,7 @@ client.on("interactionCreate", async interaction => {
         try {
           for (const value of values) {
             const modes = setup.format === "1x1"
-              ? ["choice"]
+              ? ["gelo_normal", "gelo_infinito"]
               : ["normal"];
 
             for (const mode of modes) {
