@@ -1887,7 +1887,7 @@ client.on("interactionCreate", async interaction => {
        MENUS DE CANAIS
     ---------------------------------------------------- */
 
-    if (interaction.isChannelSelectMenu()) {
+    if (interaction.isChannelSelectMenu() && interaction.customId !== "fila_setup_channel") {
       if (!(await requireAdmin(interaction))) return;
 
       const channelId = interaction.values[0];
@@ -2174,6 +2174,7 @@ client.on("interactionCreate", async interaction => {
 
     if (interaction.isChannelSelectMenu() && interaction.customId === "fila_setup_channel") {
       if (!(await requireAdmin(interaction))) return;
+      await interaction.deferUpdate();
       const setup = filaSetup.get(interaction.user.id) || { format: null, modality: null, channelId: null };
       setup.channelId = interaction.values[0];
       filaSetup.set(interaction.user.id, setup);
@@ -2185,7 +2186,7 @@ client.on("interactionCreate", async interaction => {
       const channel = await getChannel(interaction.guild, setup.channelId);
       if (!channel || !channel.isTextBased()) {
         filaSetup.delete(interaction.user.id);
-        return interaction.update({ content: "❌ O canal selecionado é inválido.", components: [] });
+        return interaction.editReply({ content: "❌ O canal selecionado é inválido.", components: [] });
       }
 
       const values = ALLOWED_VALUES.slice().sort((a, b) => b - a);
@@ -2208,12 +2209,12 @@ client.on("interactionCreate", async interaction => {
       } catch (error) {
         console.error("❌ Erro ao publicar as filas:", error);
         filaSetup.delete(interaction.user.id);
-        return interaction.update({ content: `❌ Não foi possível publicar as filas no canal selecionado. Verifique as permissões do bot.\n\nDetalhe: ${error.message || "erro desconhecido"}`, components: [] });
+        return interaction.editReply({ content: `❌ Não foi possível publicar as filas no canal selecionado. Verifique as permissões do bot.\n\nDetalhe: ${error.message || "erro desconhecido"}`, components: [] });
       }
 
       saveDatabase();
       filaSetup.delete(interaction.user.id);
-      return interaction.update({ content: `✅ **Todas as filas foram publicadas!**\n\n📌 **Canal:** ${channel}\n🎮 **Formato:** ${setup.format}\n📱 **Modalidade:** ${modalityName(setup.modality)}\n💰 **Valores:** ${values.map(money).join(", ")}\n👥 **Limite por fila:** 2 jogadores`, components: [] });
+      return interaction.editReply({ content: `✅ **Todas as filas foram publicadas!**\n\n📌 **Canal:** ${channel}\n🎮 **Formato:** ${setup.format}\n📱 **Modalidade:** ${modalityName(setup.modality)}\n💰 **Valores:** ${values.map(money).join(", ")}\n👥 **Limite por fila:** 2 jogadores`, components: [] });
     }
 
     if (interaction.isStringSelectMenu()) {
@@ -2233,76 +2234,7 @@ client.on("interactionCreate", async interaction => {
         return interaction.deferUpdate();
       }
 
-      if (interaction.customId === "fila_setup_channel") {
-        if (!(await requireAdmin(interaction))) return;
-        const setup = filaSetup.get(interaction.user.id) || { format: null, modality: null, channelId: null };
-        setup.channelId = interaction.values[0];
-        filaSetup.set(interaction.user.id, setup);
 
-        if (!setup.format || !setup.modality || !setup.channelId) {
-          return interaction.deferUpdate();
-        }
-
-        const channel = await getChannel(interaction.guild, setup.channelId);
-        if (!channel || !channel.isTextBased()) {
-          filaSetup.delete(interaction.user.id);
-          return interaction.update({ content: "❌ O canal selecionado é inválido.", components: [] });
-        }
-
-        // Publica AUTOMATICAMENTE todas as filas pré-definidas.
-        // O ADM escolhe apenas formato, modalidade e canal.
-        const values = ALLOWED_VALUES.slice().sort((a, b) => b - a);
-        const published = [];
-
-        try {
-          for (const value of values) {
-            const modes = setup.format === "1x1"
-              ? ["gelo_normal", "gelo_infinito"]
-              : ["normal"];
-
-            for (const mode of modes) {
-              const queue = getQueue(setup.format, setup.modality, value, mode);
-              queue.channelId = channel.id;
-              queue.guildId = interaction.guild.id;
-
-              let sentMessage = null;
-              if (queue.messageId) {
-                sentMessage = await channel.messages.fetch(queue.messageId).catch(() => null);
-              }
-
-              if (sentMessage) {
-                await sentMessage.edit({
-                  embeds: [makeEmbed(`🎮 FILA ${setup.format}`, queueDescription(queue))],
-                  components: queueComponents(queue)
-                });
-              } else {
-                sentMessage = await channel.send({
-                  embeds: [makeEmbed(`🎮 FILA ${setup.format}`, queueDescription(queue))],
-                  components: queueComponents(queue)
-                });
-                queue.messageId = sentMessage.id;
-              }
-
-              published.push(`${money(value)}${setup.format === "1x1" ? ` — ${mode === "gelo_infinito" ? "Gelo Infinito" : "Gelo Normal"}` : ""}`);
-            }
-          }
-        } catch (error) {
-          console.error("❌ Erro ao publicar as filas:", error);
-          filaSetup.delete(interaction.user.id);
-          return interaction.update({
-            content: `❌ Não foi possível publicar as filas no canal selecionado. Verifique se o bot tem permissão para **Ver Canal**, **Enviar Mensagens** e **Incorporar Links**.\n\nDetalhe: ${error.message || "erro desconhecido"}`,
-            components: []
-          });
-        }
-
-        saveDatabase();
-        filaSetup.delete(interaction.user.id);
-
-        return interaction.update({
-          content: `✅ **Todas as filas foram publicadas!**\n\n📌 **Canal:** ${channel}\n🎮 **Formato:** ${setup.format}\n📱 **Modalidade:** ${modalityName(setup.modality)}\n💰 **Valores:** ${values.map(money).join(", ")}\n👥 **Limite por fila:** 2 jogadores`,
-          components: []
-        });
-      }
     }
 
     /* ----------------------------------------------------
