@@ -549,9 +549,16 @@ function betEmbed(bet) {
       "",
       bet.mediatorId
         ? `👨‍⚖️ **Mediador:** <@${bet.mediatorId}>`
-        : "👨‍⚖️ **Mediador:** aguardando distribuição",
+        : "👨‍⚖️ **Mediador:** aguardando disponibilidade",
       "",
-      "✅ Cada jogador deve confirmar a aposta abaixo.",
+      "✅ **CONFIRMAÇÕES**",
+      bet.players.map((id, index) =>
+        `${index + 1}. <@${id}> — ${bet.confirmedBy.includes(id) ? "✅ Confirmou" : "⏳ Aguardando"}`
+      ).join("\n"),
+      "",
+      bet.confirmedBy.length === bet.players.length
+        ? "🔓 Ambos confirmaram. O acesso do Mediador foi liberado."
+        : "🔒 O Mediador só receberá acesso após as duas confirmações.",
       "❌ Se alguém cancelar, a aposta será encerrada."
     ].join("\n")
   );
@@ -570,6 +577,22 @@ function betButtons(betId) {
         .setLabel("Cancelar")
         .setEmoji("❌")
         .setStyle(ButtonStyle.Danger)
+    )
+  ];
+}
+
+function mediatorPanelComponents(betId) {
+  return [
+    new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(`med_panel|${betId}`)
+        .setPlaceholder("👨‍⚖️ Selecione uma ação do Mediador")
+        .addOptions([
+          { label: "Escolher vencedor", value: "winner", emoji: "🏆", description: "Selecionar um dos 2 jogadores" },
+          { label: "Vitória por W.O.", value: "wo", emoji: "🚫", description: "Selecionar um dos 2 jogadores" },
+          { label: "Enviar ID e senha da sala", value: "room", emoji: "🎮", description: "Enviar os dados da sala" },
+          { label: "Finalizar aposta", value: "finish", emoji: "🏁", description: "Finalizar a aposta" }
+        ])
     )
   ];
 }
@@ -629,6 +652,9 @@ function paymentEmbed(bet) {
     [
       "Os dois jogadores confirmaram a aposta. Realize o pagamento abaixo e aguarde o Mediador.",
       "",
+      "👥 **JOGADORES**",
+      bet.players.map((id, index) => `${index + 1}. <@${id}> — ✅ Confirmou`).join("\n"),
+      "",
       "💰 **VALORES**",
       `• Cada jogador: **${money(bet.value)}**`,
       `• Total da aposta: **${money(bet.value * 2)}**`,
@@ -667,18 +693,6 @@ async function createPrivateBetChannel(guild, bet) {
         PermissionFlagsBits.ViewChannel,
         PermissionFlagsBits.SendMessages,
         PermissionFlagsBits.ReadMessageHistory
-      ]
-    });
-  }
-
-  if (bet.mediatorId) {
-    overwrites.push({
-      id: bet.mediatorId,
-      allow: [
-        PermissionFlagsBits.ViewChannel,
-        PermissionFlagsBits.SendMessages,
-        PermissionFlagsBits.ReadMessageHistory,
-        PermissionFlagsBits.ManageChannels
       ]
     });
   }
@@ -722,19 +736,7 @@ async function distributeMediator(bet, guild) {
 
   bet.mediatorId = mediatorId;
 
-  if (bet.channelId) {
-    const channel = await guild.channels.fetch(bet.channelId).catch(() => null);
-
-    if (channel) {
-      await channel.permissionOverwrites.edit(mediatorId, {
-        ViewChannel: true,
-        SendMessages: true,
-        ReadMessageHistory: true,
-        ManageChannels: true
-      }).catch(() => {});
-    }
-  }
-
+  // O acesso ao canal só é concedido depois das duas confirmações.
   saveDatabase();
   return true;
 }
@@ -743,6 +745,10 @@ async function createBetFromQueue(interaction, queue) {
   const needed = requiredPlayers(queue.format);
 
   if (queue.players.length < needed) {
+    return null;
+  }
+
+  if (!db.mediatorQueue.length) {
     return null;
   }
 
@@ -778,10 +784,9 @@ async function createBetFromQueue(interaction, queue) {
   const hasMediator = await distributeMediator(bet, interaction.guild);
 
   if (!hasMediator) {
-    // Regra: sem Mediador não pode puxar aposta.
-    // A aposta pode existir na fila aguardando Mediador, mas nenhum
-    // Mediador é automaticamente criado/inventado.
-    bet.status = "waiting_mediator";
+    queue.players.unshift(...players);
+    delete db.bets[id];
+    return null;
   }
 
   const channel = await createPrivateBetChannel(interaction.guild, bet);
@@ -799,17 +804,11 @@ async function createBetFromQueue(interaction, queue) {
       embeds: [
         makeEmbed(
           "👨‍⚖️ MEDIADOR ATRIBUÍDO",
-          `O sistema atribuiu <@${bet.mediatorId}> pelo rodízio automático.`
-        )
-      ],
-      components: mediatorControlButtons(id)
-    });
-  } else {
-    await channel.send({
-      embeds: [
-        makeEmbed(
-          "⏳ AGUARDANDO MEDIADOR",
-          "A aposta foi criada, mas ainda não há Mediador disponível. Um Mediador poderá assumir quando estiver disponível."
+          [
+            `O sistema atribuiu <@${bet.mediatorId}> pelo rodízio automático.`,
+            "",
+            "🔒 O acesso ao canal e ao painel será liberado somente depois que os 2 jogadores confirmarem."
+          ].join("\n")
         )
       ]
     });
@@ -1063,6 +1062,10 @@ client.on("messageCreate", async message => {
         return message.reply("❌ Você não é o Mediador responsável por esta aposta.");
       }
 
+      if (bet.confirmedBy.length < bet.players.length) {
+        return message.reply("🔒 O painel do Mediador será liberado somente após os 2 jogadores confirmarem.");
+      }
+
       return message.reply({
         embeds: [
           makeEmbed(
@@ -1077,7 +1080,7 @@ client.on("messageCreate", async message => {
             ].join("\n")
           )
         ],
-        components: mediatorControlButtons(bet.id)
+        components: mediatorPanelComponents(bet.id)
       });
     }
     if (command === ".p") {
@@ -1462,6 +1465,7 @@ client.on("interactionCreate", async interaction => {
 
       /* FILA */
       if (action === "queue_join") {
+        await interaction.deferReply({ ephemeral: true });
         const queue = db.queues[parts[0]];
         const selectedMode = parts[1] || null;
 
@@ -1504,6 +1508,19 @@ client.on("interactionCreate", async interaction => {
 
         queue.players.push(interaction.user.id);
 
+        if (
+          queue.players.length >= requiredPlayers(queue.format) &&
+          db.mediatorQueue.length === 0
+        ) {
+          queue.players.pop();
+          saveDatabase();
+          await refreshQueueMessage(queue, interaction.guild);
+          return interaction.editReply({
+            content: "❌ Não há Mediador disponível no momento. A aposta não pode ser puxada.",
+            components: []
+          });
+        }
+
         const bet =
           queue.players.length >= requiredPlayers(queue.format)
             ? await createBetFromQueue(interaction, queue)
@@ -1512,7 +1529,7 @@ client.on("interactionCreate", async interaction => {
         saveDatabase();
 
         if (bet) {
-          return interaction.reply({
+          return interaction.editReply({
             content:
               `🎮 Aposta criada em ${bet.channelId ? `<#${bet.channelId}>` : "canal privado"}.`,
             ephemeral: true
@@ -1521,10 +1538,10 @@ client.on("interactionCreate", async interaction => {
 
         await refreshQueueMessage(queue, interaction.guild);
 
-        await interaction.reply({
+        await interaction.editReply({
           content:
             `✅ Você entrou na fila **${queue.format} ${modalityName(queue.modality)}** por **${money(queue.value)}**.`,
-          ephemeral: true
+          components: []
         });
 
         return;
@@ -1636,56 +1653,61 @@ client.on("interactionCreate", async interaction => {
       /* APOSTA */
       if (action === "bet_confirm") {
         const bet = db.bets[parts[0]];
-
-        if (!bet) {
-          return deny(interaction, "❌ Aposta não encontrada.");
-        }
-
+        if (!bet) return deny(interaction, "❌ Aposta não encontrada.");
         if (!bet.players.includes(interaction.user.id)) {
-          return deny(
-            interaction,
-            "❌ Você não participa desta aposta."
-          );
+          return deny(interaction, "❌ Você não participa desta aposta.");
+        }
+        if (bet.status !== "waiting_confirmation") {
+          return deny(interaction, "❌ Esta aposta não está mais aguardando confirmações.");
         }
 
+        await interaction.deferReply({ ephemeral: true });
         if (!bet.confirmedBy.includes(interaction.user.id)) {
           bet.confirmedBy.push(interaction.user.id);
         }
-
         saveDatabase();
 
+        await interaction.message.edit({
+          embeds: [betEmbed(bet)],
+          components: bet.confirmedBy.length < bet.players.length ? betButtons(bet.id) : []
+        }).catch(() => {});
+
         if (bet.confirmedBy.length < bet.players.length) {
-          return interaction.reply({
-            content:
-              `✅ Confirmação registrada: ${bet.confirmedBy.length}/${bet.players.length}.`,
-            ephemeral: true
+          return interaction.editReply({
+            content: `✅ **${interaction.user.username}** confirmou. ${bet.confirmedBy.length}/${bet.players.length} jogadores confirmaram.`,
+            components: []
           });
         }
 
         bet.status = "payment";
 
-        await interaction.message.edit({
-          embeds: [paymentEmbed(bet)],
-          components: []
-        }).catch(() => {});
+        if (bet.mediatorId && bet.channelId) {
+          const channel = await interaction.guild.channels.fetch(bet.channelId).catch(() => null);
+          if (channel) {
+            await channel.permissionOverwrites.edit(bet.mediatorId, {
+              ViewChannel: true,
+              SendMessages: true,
+              ReadMessageHistory: true,
+              ManageChannels: true
+            }).catch(() => {});
+          }
+        }
+
+        // PIX é enviado como nova mensagem, preservando o painel de confirmação.
+        await interaction.channel.send({ embeds: [paymentEmbed(bet)] }).catch(() => {});
 
         if (bet.mediatorId) {
           await interaction.channel.send({
-            embeds: [
-              makeEmbed(
-                "👨‍⚖️ CONTROLE DO MEDIADOR",
-                "A aposta foi confirmada. O Mediador pode controlar o resultado pelos botões abaixo."
-              )
-            ],
-            components: mediatorControlButtons(bet.id)
+            content: `<@${bet.mediatorId}>`,
+            embeds: [makeEmbed("👨‍⚖️ CONTROLE DO MEDIADOR", "Os dois jogadores confirmaram. O acesso do Mediador foi liberado.")],
+            components: mediatorPanelComponents(bet.id)
           }).catch(() => {});
         }
 
         saveDatabase();
-
-        return interaction.reply({
-          content: "✅ Todos os jogadores confirmaram. Pagamento liberado.",
-          ephemeral: true
+        return interaction.editReply({
+          content: "✅ Todos os jogadores confirmaram. Pagamento liberado e acesso do Mediador concedido.",
+          components: []
         });
       }
 
@@ -1738,22 +1760,14 @@ client.on("interactionCreate", async interaction => {
           );
         }
 
-        const modal = new ModalBuilder()
-          .setCustomId(`result_normal|${bet.id}`)
-          .setTitle("Escolher vencedor");
-
-        modal.addComponents(
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder()
-              .setCustomId("winner_id")
-              .setLabel("ID do vencedor")
-              .setPlaceholder("ID Discord de um jogador da aposta")
-              .setStyle(TextInputStyle.Short)
-              .setRequired(true)
-          )
-        );
-
-        return interaction.showModal(modal);
+        if (bet.confirmedBy.length < bet.players.length) return deny(interaction, "🔒 Aguarde os 2 jogadores confirmarem.");
+        return interaction.reply({
+          content: "🏆 Selecione um dos 2 jogadores:",
+          components: [new ActionRowBuilder().addComponents(
+            new StringSelectMenuBuilder().setCustomId(`result_normal|${bet.id}`).setPlaceholder("Escolher vencedor")
+              .addOptions(bet.players.map((id, index) => ({ label: `Jogador ${index + 1}`, value: id, description: "Selecionar este jogador", emoji: "🏆" })))
+          )], ephemeral: true
+        });
       }
 
       if (action === "med_wo") {
@@ -1772,22 +1786,14 @@ client.on("interactionCreate", async interaction => {
           );
         }
 
-        const modal = new ModalBuilder()
-          .setCustomId(`result_wo|${bet.id}`)
-          .setTitle("Vitória por W.O.");
-
-        modal.addComponents(
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder()
-              .setCustomId("winner_id")
-              .setLabel("ID do vencedor")
-              .setPlaceholder("ID Discord do jogador vencedor")
-              .setStyle(TextInputStyle.Short)
-              .setRequired(true)
-          )
-        );
-
-        return interaction.showModal(modal);
+        if (bet.confirmedBy.length < bet.players.length) return deny(interaction, "🔒 Aguarde os 2 jogadores confirmarem.");
+        return interaction.reply({
+          content: "🚫 Selecione um dos 2 jogadores:",
+          components: [new ActionRowBuilder().addComponents(
+            new StringSelectMenuBuilder().setCustomId(`result_wo|${bet.id}`).setPlaceholder("Escolher vencedor por W.O.")
+              .addOptions(bet.players.map((id, index) => ({ label: `Jogador ${index + 1}`, value: id, description: "Selecionar este jogador", emoji: "🚫" })))
+          )], ephemeral: true
+        });
       }
 
       if (action === "med_finish") {
@@ -1806,6 +1812,7 @@ client.on("interactionCreate", async interaction => {
           );
         }
 
+        if (bet.confirmedBy.length < bet.players.length) return deny(interaction, "🔒 Aguarde os 2 jogadores confirmarem.");
         bet.status = "finished";
         saveDatabase();
 
@@ -1840,6 +1847,8 @@ client.on("interactionCreate", async interaction => {
             "❌ Você não é o Mediador responsável."
           );
         }
+
+        if (bet.confirmedBy.length < bet.players.length) return deny(interaction, "🔒 Aguarde os 2 jogadores confirmarem.");
 
         const modal = new ModalBuilder()
           .setCustomId(`room_modal|${bet.id}`)
@@ -2084,6 +2093,7 @@ client.on("interactionCreate", async interaction => {
             `📝 **Nome:** ${name}`,
             `🔑 **Chave Pix:** \`${key}\``,
             "",
+            "📷 **QR Code:** abaixo deste cadastro.",
             "✅ Cadastro salvo com sucesso."
           ].join("\n")
         );
@@ -2158,6 +2168,7 @@ client.on("interactionCreate", async interaction => {
 
       /* SALA FREE FIRE */
       if (interaction.customId.startsWith("room_modal|")) {
+        await interaction.deferReply({ ephemeral: true });
         if (!(await requireMediator(interaction))) return;
 
         const betId = interaction.customId.split("|")[1];
@@ -2190,7 +2201,7 @@ client.on("interactionCreate", async interaction => {
         const channel = interaction.channel;
 
         if (channel && channel.isTextBased() && "setName" in channel) {
-          await channel.setName(`pagamento-${paymentLabel}`).catch(error => {
+          await channel.setName(`pagar-${paymentLabel}`).catch(error => {
             console.error("❌ Não foi possível renomear o canal:", error);
           });
         }
@@ -2206,11 +2217,11 @@ client.on("interactionCreate", async interaction => {
             `🆔 **ID da sala:** \`${roomId}\``,
             `🔐 **Senha:** \`${roomPassword}\``,
             "",
-            `📌 **Canal:** \`pagamento-${paymentLabel}\``
+            `📌 **Canal:** \`pagar-${paymentLabel}\``
           ].join("\n")
         );
 
-        return interaction.reply({
+        return interaction.editReply({
           embeds: [embed],
           components: [
             new ActionRowBuilder().addComponents(
@@ -2304,7 +2315,7 @@ client.on("interactionCreate", async interaction => {
       filaSetup.set(interaction.user.id, setup);
 
       if (!setup.format || !setup.modality || !setup.channelId) {
-        return interaction.deferUpdate();
+        return;
       }
 
       const channel = await getChannel(interaction.guild, setup.channelId);
@@ -2342,6 +2353,35 @@ client.on("interactionCreate", async interaction => {
     }
 
     if (interaction.isStringSelectMenu()) {
+      if (interaction.customId.startsWith("result_normal|") || interaction.customId.startsWith("result_wo|")) {
+        if (!(await requireMediator(interaction))) return;
+        const [resultAction, betId] = interaction.customId.split("|");
+        const bet = db.bets[betId];
+        if (!bet) return deny(interaction, "❌ Aposta não encontrada.");
+        if (bet.mediatorId && bet.mediatorId !== interaction.user.id) return deny(interaction, "❌ Você não é o Mediador responsável.");
+        if (bet.confirmedBy.length < bet.players.length) return deny(interaction, "🔒 Os 2 jogadores precisam confirmar.");
+        if (bet.resultType) return deny(interaction, "❌ O resultado desta aposta já foi definido.");
+        const winnerId = interaction.values[0];
+        const loserId = bet.players.find(id => id !== winnerId);
+        if (!loserId) return deny(interaction, "❌ Não foi possível identificar o outro jogador.");
+        bet.winnerId = winnerId;
+        bet.resultType = resultAction === "result_wo" ? "wo" : "normal";
+        bet.status = "result_set";
+        userStats(winnerId).wins += 1;
+        userStats(loserId).losses += 1;
+        if (bet.resultType === "wo") userStats(winnerId).woWins += 1;
+        saveDatabase();
+        return interaction.update({
+          embeds: [makeEmbed(bet.resultType === "wo" ? "🚫 VITÓRIA POR W.O." : "🏆 VENCEDOR DEFINIDO", [
+            `🏆 **Vencedor:** <@${winnerId}>`,
+            `❌ **Outro jogador:** <@${loserId}>`,
+            "",
+            "Use o painel do Mediador para finalizar a aposta."
+          ].join("\n"))],
+          components: mediatorPanelComponents(bet.id)
+        });
+      }
+
       if (interaction.customId === "fila_setup_format") {
         if (!(await requireAdmin(interaction))) return;
         const setup = filaSetup.get(interaction.user.id) || { format: null, modality: null, channelId: null };
@@ -2427,6 +2467,56 @@ client.on("interactionCreate", async interaction => {
           content: `✅ **Todas as filas foram publicadas!**\n\n📌 **Canal:** ${channel}\n🎮 **Formato:** ${setup.format}\n📱 **Modalidade:** ${modalityName(setup.modality)}\n💰 **Valores:** ${values.map(money).join(", ")}\n👥 **Limite por fila:** 2 jogadores`,
           components: []
         });
+      }
+    }
+
+    /* ----------------------------------------------------
+       PAINEL DO MEDIADOR — MENU SUSPENSO
+    ---------------------------------------------------- */
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith("med_panel|")) {
+      if (!(await requireMediator(interaction))) return;
+      const betId = interaction.customId.split("|")[1];
+      const bet = db.bets[betId];
+      if (!bet) return deny(interaction, "❌ Aposta não encontrada.");
+      if (bet.mediatorId && bet.mediatorId !== interaction.user.id) {
+        return deny(interaction, "❌ Você não é o Mediador responsável.");
+      }
+      if (bet.confirmedBy.length < bet.players.length) {
+        return deny(interaction, "🔒 Aguarde os 2 jogadores confirmarem.");
+      }
+
+      const choice = interaction.values[0];
+      if (choice === "winner" || choice === "wo") {
+        return interaction.reply({
+          content: choice === "winner" ? "🏆 Selecione um dos 2 jogadores:" : "🚫 Selecione um dos 2 jogadores:",
+          components: [new ActionRowBuilder().addComponents(
+            new StringSelectMenuBuilder()
+              .setCustomId(`${choice === "winner" ? "result_normal" : "result_wo"}|${bet.id}`)
+              .setPlaceholder("👥 Escolha o jogador")
+              .addOptions(bet.players.map((id, index) => ({
+                label: `Jogador ${index + 1}`,
+                value: id,
+                description: "Selecionar este jogador",
+                emoji: choice === "winner" ? "🏆" : "🚫"
+              })))
+          )],
+          ephemeral: true
+        });
+      }
+      if (choice === "room") {
+        const modal = new ModalBuilder().setCustomId(`room_modal|${bet.id}`).setTitle("Sala Free Fire");
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("room_id").setLabel("ID da sala").setPlaceholder("ID").setStyle(TextInputStyle.Short).setRequired(true)),
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("room_password").setLabel("Senha da sala").setPlaceholder("Senha").setStyle(TextInputStyle.Short).setRequired(true))
+        );
+        return interaction.showModal(modal);
+      }
+      if (choice === "finish") {
+        bet.status = "finished";
+        saveDatabase();
+        await interaction.reply({ embeds: [makeEmbed("🏁 APOSTA FINALIZADA", "A aposta foi finalizada pelo Mediador.")] });
+        setTimeout(() => interaction.channel?.delete("Aposta finalizada").catch(() => {}), 5000);
+        return;
       }
     }
 
