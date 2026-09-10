@@ -16,6 +16,8 @@ COMANDOS:
   /config
   /fila
   /cadastro
+  /embeds
+  /fila streamer
   .ssmob
   .ssemu
   .med
@@ -31,6 +33,7 @@ REGRAS:
   - 1x1: Gelo Normal / Gelo Infinito / Sair.
   - 2x2, 3x3, 4x4: Entrar / Sair.
   - Fila de Mediadores: somente cargo Mediador.
+  - Fila de Streamer: somente cargo Influencer/Streamer configurado.
   - Rodízio de Mediadores.
   - Sem Mediador disponível, aposta não pode ser puxada.
   - .p mostra: Vitórias / Derrotas / Vitórias por W.O. / Coins.
@@ -104,6 +107,7 @@ function createDefaultDatabase() {
     config: {
       mediatorRoleId: null,
       analystRoleId: null,
+      streamerRoleId: null,
       admins: [],
       fee: 0.01,
       embedColor: "#5865F2",
@@ -112,6 +116,7 @@ function createDefaultDatabase() {
       ssemuChannelId: null,
       mediatorQueueChannelId: null,
       betCategoryId: null,
+      streamerCategoryId: null,
       mediatorQueueMessageId: null
     },
 
@@ -128,6 +133,9 @@ function createDefaultDatabase() {
     bets: {},
 
     analyses: {},
+
+    streamerQueues: {},
+    streamerMatches: {},
 
     createdAt: Date.now()
   };
@@ -244,9 +252,9 @@ function userStats(userId) {
 function configEmbed() {
   const c = db.config;
   return makeEmbed("⚙️ CONFIG DO BOT", [
-    `🛡️ **Equipe:** ${c.mediatorRoleId ? `<@&${c.mediatorRoleId}>` : "❌"} • ${c.analystRoleId ? `<@&${c.analystRoleId}>` : "❌"}`,
+    `🛡️ **Equipe:** ${c.mediatorRoleId ? `<@&${c.mediatorRoleId}>` : "❌"} • ${c.analystRoleId ? `<@&${c.analystRoleId}>` : "❌"} • ${c.streamerRoleId ? `<@&${c.streamerRoleId}>` : "❌"}`,
     `👑 **ADMs:** ${c.admins.length}/20`,
-    `💰 **Taxa:** ${money(c.fee)} • **Categoria:** ${c.betCategoryId ? `<#${c.betCategoryId}>` : "❌"}`,
+    `💰 **Taxa:** ${money(c.fee)} • **Categoria:** ${c.betCategoryId ? `<#${c.betCategoryId}>` : "❌"} • **Streamer:** ${c.streamerCategoryId ? `<#${c.streamerCategoryId}>` : "❌"}`,
     `📢 **Filas:** ${c.ssmobChannelId ? `<#${c.ssmobChannelId}>` : "❌"} • ${c.ssemuChannelId ? `<#${c.ssemuChannelId}>` : "❌"}`,
     `👨‍⚖️ **Mediadores:** ${c.mediatorQueueChannelId ? `<#${c.mediatorQueueChannelId}>` : "❌"}`,
     `🎨 **Cor:** \`${c.embedColor}\` • **Foto:** ${c.profileImage ? "✅" : "❌"}`
@@ -287,6 +295,13 @@ function analystCheck(interaction) {
   );
 }
 
+function streamerCheck(interaction) {
+  return Boolean(
+    db.config.streamerRoleId &&
+    interaction.member?.roles?.cache?.has(db.config.streamerRoleId)
+  );
+}
+
 async function deny(interaction, text) {
   if (interaction.replied || interaction.deferred) {
     return interaction.followUp({ content: text, ephemeral: true }).catch(() => {});
@@ -313,6 +328,14 @@ async function requireMediator(interaction) {
 async function requireAnalyst(interaction) {
   if (!analystCheck(interaction)) {
     await deny(interaction, "❌ Apenas Analistas podem usar esta função.");
+    return false;
+  }
+  return true;
+}
+
+async function requireStreamer(interaction) {
+  if (!streamerCheck(interaction)) {
+    await deny(interaction, "❌ Apenas Influencers/Streamers com o cargo configurado podem usar esta função.");
     return false;
   }
   return true;
@@ -525,8 +548,8 @@ function paymentMessage(bet) {
 }
 
 async function createPrivateAnalysisChannel(guild, analysis) {
-  const category = db.config.betCategoryId
-    ? await guild.channels.fetch(db.config.betCategoryId).catch(() => null)
+  const category = db.config.streamerCategoryId
+    ? await guild.channels.fetch(db.config.streamerCategoryId).catch(() => null)
     : null;
 
   const overwrites = [
@@ -702,6 +725,188 @@ async function createBetFromQueue(interaction, queue) {
 }
 
 /* ========================================================
+   FILAS DE STREAMERS / INFLUENCERS
+======================================================== */
+
+function streamerQueueEmbed(queue, guild) {
+  const streamerMention = `<@${queue.streamerId}>`;
+  const waiting = queue.players?.length
+    ? queue.players.map((id, index) => `**${index + 1}.** <@${id}>`).join("\n")
+    : "_Ninguém aguardando._";
+
+  const active = queue.activeMatchId && db.streamerMatches?.[queue.activeMatchId]
+    ? "🟢 **Em atendimento:** 1 jogador"
+    : "🟢 **Disponível:** aguardando jogador";
+
+  return makeEmbed(`🎥 FILA DO ${guild?.members?.cache?.get(queue.streamerId)?.displayName || "INFLUENCER"}`, [
+    `👑 **Influencer:** ${streamerMention}`,
+    `🎮 **Formato:** ${queue.format}`,
+    `💰 **Valor:** ${money(queue.value)}`,
+    "",
+    `📜 **Regras / descrição:**\n${queue.description || "_Nenhuma regra informada._"}`,
+    "",
+    active,
+    `👥 **Aguardando:** ${queue.players?.length || 0}`,
+    waiting
+  ].join("\n"));
+}
+
+function streamerQueueComponents(queue) {
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`streamer_join|${queue.id}`)
+        .setLabel("Entrar na fila")
+        .setEmoji("🎮")
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId(`streamer_leave|${queue.id}`)
+        .setLabel("Sair da fila")
+        .setEmoji("🚪")
+        .setStyle(ButtonStyle.Danger)
+    )
+  ];
+}
+
+async function refreshStreamerQueueMessage(queue, guild) {
+  if (!queue.channelId || !queue.messageId) return;
+  const channel = await guild.channels.fetch(queue.channelId).catch(() => null);
+  if (!channel || !channel.isTextBased()) return;
+  const message = await channel.messages.fetch(queue.messageId).catch(() => null);
+  if (!message) return;
+  await message.edit({
+    embeds: [streamerQueueEmbed(queue, guild)],
+    components: streamerQueueComponents(queue)
+  }).catch(() => {});
+}
+
+async function createStreamerMatchChannel(guild, queue, playerId) {
+  const streamerMember = await guild.members.fetch(queue.streamerId).catch(() => null);
+  if (!streamerMember) return null;
+
+  const category = db.config.betCategoryId
+    ? await guild.channels.fetch(db.config.betCategoryId).catch(() => null)
+    : null;
+
+  const overwrites = [
+    { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+    {
+      id: queue.streamerId,
+      allow: [
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.ReadMessageHistory,
+        PermissionFlagsBits.ManageMessages
+      ]
+    },
+    {
+      id: playerId,
+      allow: [
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.ReadMessageHistory
+      ]
+    }
+  ];
+
+  return guild.channels.create({
+    name: `streamer-${valueId(queue.value).replace(".", "-")}`,
+    type: ChannelType.GuildText,
+    parent: category?.type === ChannelType.GuildCategory ? category.id : undefined,
+    permissionOverwrites: overwrites
+  });
+}
+
+async function startNextStreamerMatch(queue, guild) {
+  if (queue.activeMatchId) return null;
+  if (!queue.players?.length) {
+    await refreshStreamerQueueMessage(queue, guild);
+    saveDatabase();
+    return null;
+  }
+
+  const playerId = queue.players.shift();
+  const channel = await createStreamerMatchChannel(guild, queue, playerId);
+
+  if (!channel) {
+    queue.players.unshift(playerId);
+    await refreshStreamerQueueMessage(queue, guild);
+    saveDatabase();
+    return null;
+  }
+
+  const matchId = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  const match = {
+    id: matchId,
+    guildId: guild.id,
+    queueId: queue.id,
+    streamerId: queue.streamerId,
+    playerId,
+    channelId: channel.id,
+    format: queue.format,
+    value: queue.value,
+    createdAt: Date.now(),
+    status: "active"
+  };
+
+  db.streamerMatches[matchId] = match;
+  queue.activeMatchId = matchId;
+
+  await channel.send({
+    content: `<@${queue.streamerId}> <@${playerId}>`,
+    embeds: [
+      makeEmbed("🎥 APOSTA COM INFLUENCER", [
+        `👑 **Influencer:** <@${queue.streamerId}>`,
+        `🎮 **Jogador:** <@${playerId}>`,
+        `🎯 **Formato:** ${queue.format}`,
+        `💰 **Valor:** ${money(queue.value)}`,
+        "",
+        `📜 **Regras:**\n${queue.description || "_Nenhuma regra informada._"}`,
+        "",
+        "👑 O Influencer é o responsável por gerenciar esta aposta.",
+        "🏁 Para finalizar, o Influencer deve usar **`.f`** neste canal."
+      ].join("\n"))
+    ]
+  }).catch(() => {});
+
+  saveDatabase();
+  await refreshStreamerQueueMessage(queue, guild);
+  return match;
+}
+
+async function finishStreamerMatch(message, match) {
+  const queue = db.streamerQueues?.[match.queueId];
+  if (!queue) {
+    delete db.streamerMatches[match.id];
+    saveDatabase();
+    return;
+  }
+
+  match.status = "finished";
+  delete db.streamerMatches[match.id];
+  queue.activeMatchId = null;
+  saveDatabase();
+
+  await message.reply({
+    embeds: [makeEmbed("🏁 APOSTA FINALIZADA", [
+      "A aposta com o Influencer foi finalizada.",
+      "",
+      `👑 **Influencer:** <@${match.streamerId}>`,
+      `🎮 **Jogador:** <@${match.playerId}>`,
+      `💰 **Valor:** ${money(match.value)}`,
+      "",
+      "⏭️ O próximo jogador da fila será chamado automaticamente."
+    ].join("\n"))]
+  }).catch(() => {});
+
+  const guild = message.guild;
+  setTimeout(async () => {
+    await guild.channels.delete(match.channelId, "Aposta com Influencer finalizada").catch(() => {});
+    await startNextStreamerMatch(queue, guild);
+  }, 3000);
+}
+
+/* ========================================================
    CONFIGURAÇÃO
 ======================================================== */
 
@@ -747,6 +952,12 @@ function configButtons() {
         .setStyle(ButtonStyle.Secondary),
 
       new ButtonBuilder()
+        .setCustomId("config_streamer_category")
+        .setLabel("Categoria Streamer")
+        .setEmoji("🎥")
+        .setStyle(ButtonStyle.Secondary),
+
+      new ButtonBuilder()
         .setCustomId("config_mediator_queue")
         .setLabel("Publicar fila de Mediadores")
         .setEmoji("👨‍⚖️")
@@ -781,7 +992,12 @@ async function registerCommands() {
     new SlashCommandBuilder()
       .setName("fila")
       .setDescription("Cria e publica as filas de apostas.")
-      .setDefaultMemberPermissions(null),
+      .setDefaultMemberPermissions(null)
+      .addSubcommand(subcommand =>
+        subcommand
+          .setName("streamer")
+          .setDescription("Cria uma fila exclusiva para um Influencer/Streamer.")
+      ),
 
     new SlashCommandBuilder()
       .setName("cadastro")
@@ -792,7 +1008,12 @@ async function registerCommands() {
           .setName("usuario")
           .setDescription("Usuário que receberá o cadastro Pix.")
           .setRequired(true)
-      )
+      ),
+
+    new SlashCommandBuilder()
+      .setName("embeds")
+      .setDescription("Cria e envia uma embed personalizada no canal atual.")
+      .setDefaultMemberPermissions(null)
   ].map(command => command.toJSON());
 
   const rest = new REST({ version: "10" }).setToken(TOKEN);
@@ -921,6 +1142,26 @@ client.on("messageCreate", async message => {
       await processAnalysis(message, "Emulador");
     }
 
+    if (command === ".f") {
+      const match = Object.values(db.streamerMatches || {}).find(
+        item =>
+          item.guildId === message.guild.id &&
+          item.channelId === message.channel.id &&
+          item.status === "active"
+      );
+
+      if (!match) {
+        return message.reply("❌ Este comando só pode ser usado no canal privado de uma aposta com Influencer.");
+      }
+
+      if (match.streamerId !== message.author.id || !streamerCheck({ member: message.member })) {
+        return message.reply("❌ Apenas o Influencer responsável por esta aposta pode usar `.f`.");
+      }
+
+      await finishStreamerMatch(message, match);
+      return;
+    }
+
     if (command === ".med") {
       const bet = Object.values(db.bets).find(
         item =>
@@ -1015,6 +1256,67 @@ client.on("interactionCreate", async interaction => {
         });
       }
 
+      /* /embeds */
+      if (interaction.commandName === "embeds") {
+        if (!isAdmin(interaction)) {
+          return deny(interaction, "❌ Apenas administradores podem usar este comando.");
+        }
+
+        const modal = new ModalBuilder()
+          .setCustomId("embed_builder")
+          .setTitle("Criar Embed");
+
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("embed_title")
+              .setLabel("Título")
+              .setPlaceholder("Título da embed")
+              .setStyle(TextInputStyle.Short)
+              .setRequired(true)
+              .setMaxLength(256)
+          ),
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("embed_description")
+              .setLabel("Descrição")
+              .setPlaceholder("Digite o conteúdo da embed")
+              .setStyle(TextInputStyle.Paragraph)
+              .setRequired(true)
+              .setMaxLength(4000)
+          ),
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("embed_color")
+              .setLabel("Cor HEX (opcional)")
+              .setPlaceholder("#5865F2")
+              .setStyle(TextInputStyle.Short)
+              .setRequired(false)
+              .setMaxLength(7)
+          ),
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("embed_image")
+              .setLabel("Imagem (URL, opcional)")
+              .setPlaceholder("https://...")
+              .setStyle(TextInputStyle.Short)
+              .setRequired(false)
+              .setMaxLength(500)
+          ),
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("embed_footer")
+              .setLabel("Rodapé (opcional)")
+              .setPlaceholder("Texto do rodapé")
+              .setStyle(TextInputStyle.Short)
+              .setRequired(false)
+              .setMaxLength(2048)
+          )
+        );
+
+        return interaction.showModal(modal);
+      }
+
       /* /cadastro */
       if (interaction.commandName === "cadastro") {
         const user = interaction.options.getUser("usuario");
@@ -1058,6 +1360,51 @@ client.on("interactionCreate", async interaction => {
 
       /* /fila */
       if (interaction.commandName === "fila") {
+        const subcommand = interaction.options.getSubcommand(false);
+
+        if (subcommand === "streamer") {
+          if (!(await requireStreamer(interaction))) return;
+
+          if (!db.config.streamerRoleId) {
+            return deny(interaction, "❌ O cargo de Influencer / Streamer ainda não foi configurado no `/config`.");
+          }
+
+          const modal = new ModalBuilder()
+            .setCustomId("streamer_queue_create")
+            .setTitle("Criar fila de Streamer");
+
+          modal.addComponents(
+            new ActionRowBuilder().addComponents(
+              new TextInputBuilder()
+                .setCustomId("streamer_value")
+                .setLabel("Valor da aposta")
+                .setPlaceholder("Ex.: 5 ou 5,00")
+                .setStyle(TextInputStyle.Short)
+                .setRequired(true)
+            ),
+            new ActionRowBuilder().addComponents(
+              new TextInputBuilder()
+                .setCustomId("streamer_format")
+                .setLabel("Formato")
+                .setPlaceholder("Ex.: 1x1, 2x2, 3x3 ou 4x4")
+                .setStyle(TextInputStyle.Short)
+                .setRequired(true)
+                .setMaxLength(10)
+            ),
+            new ActionRowBuilder().addComponents(
+              new TextInputBuilder()
+                .setCustomId("streamer_description")
+                .setLabel("Descrição / regras")
+                .setPlaceholder("Digite as regras da fila e informações da aposta...")
+                .setStyle(TextInputStyle.Paragraph)
+                .setRequired(true)
+                .setMaxLength(1000)
+            )
+          );
+
+          return interaction.showModal(modal);
+        }
+
         filaSetup.set(interaction.user.id, {
           format: null,
           modality: null,
@@ -1125,6 +1472,12 @@ client.on("interactionCreate", async interaction => {
               new RoleSelectMenuBuilder()
                 .setCustomId("set_analyst_role")
                 .setPlaceholder("Selecionar cargo Analista")
+            )
+            ,
+            new ActionRowBuilder().addComponents(
+              new RoleSelectMenuBuilder()
+                .setCustomId("set_streamer_role")
+                .setPlaceholder("Selecionar cargo Influencer / Streamer")
             )
           ],
           ephemeral: true
@@ -1264,6 +1617,23 @@ client.on("interactionCreate", async interaction => {
         });
       }
 
+      if (action === "config_streamer_category") {
+        if (!(await requireAdmin(interaction))) return;
+
+        return interaction.reply({
+          content: "🎥 Selecione a categoria onde serão criados os canais das filas de Streamer:",
+          components: [
+            new ActionRowBuilder().addComponents(
+              new ChannelSelectMenuBuilder()
+                .setCustomId("streamer_category")
+                .setPlaceholder("Selecionar categoria Streamer")
+                .setChannelTypes(ChannelType.GuildCategory)
+            )
+          ],
+          ephemeral: true
+        });
+      }
+
       if (action === "config_mediator_queue") {
         if (!(await requireAdmin(interaction))) return;
 
@@ -1350,6 +1720,58 @@ client.on("interactionCreate", async interaction => {
         );
 
         return interaction.showModal(modal);
+      }
+
+      /* FILA DE STREAMER */
+      if (action === "streamer_join") {
+        await interaction.deferReply({ ephemeral: true });
+        const queue = db.streamerQueues?.[parts[0]];
+
+        if (!queue) return deny(interaction, "❌ Esta fila de Streamer não existe mais.");
+        if (interaction.user.id === queue.streamerId) return deny(interaction, "❌ O Influencer não pode entrar na própria fila.");
+        if (queue.players.includes(interaction.user.id)) return deny(interaction, "❌ Você já está nessa fila.");
+
+        const alreadyInStreamerQueue = Object.values(db.streamerQueues).some(
+          q => q.guildId === interaction.guild.id && q.players?.includes(interaction.user.id)
+        );
+        if (alreadyInStreamerQueue) return deny(interaction, "❌ Você já está em uma fila de Streamer.");
+
+        const activeMatch = queue.activeMatchId ? db.streamerMatches?.[queue.activeMatchId] : null;
+        queue.players.push(interaction.user.id);
+
+        if (!activeMatch) {
+          const match = await startNextStreamerMatch(queue, interaction.guild);
+          if (!match) {
+            queue.players = queue.players.filter(id => id !== interaction.user.id);
+            saveDatabase();
+            await refreshStreamerQueueMessage(queue, interaction.guild);
+            return interaction.editReply({ content: "❌ Não foi possível iniciar o atendimento agora." });
+          }
+
+          return interaction.editReply({
+            content: `✅ Você foi chamado para jogar com o Influencer. Canal privado: <#${match.channelId}>`
+          });
+        }
+
+        saveDatabase();
+        await refreshStreamerQueueMessage(queue, interaction.guild);
+        return interaction.editReply({
+          content: `✅ Você entrou na fila. Há **${queue.players.length}** jogador${queue.players.length === 1 ? "" : "es"} aguardando.`
+        });
+      }
+
+      if (action === "streamer_leave") {
+        const queue = db.streamerQueues?.[parts[0]];
+        if (!queue) return deny(interaction, "❌ Esta fila de Streamer não existe.");
+
+        queue.players = queue.players.filter(id => id !== interaction.user.id);
+        saveDatabase();
+        await refreshStreamerQueueMessage(queue, interaction.guild);
+
+        return interaction.reply({
+          content: "✅ Você saiu da fila de Streamer.",
+          ephemeral: true
+        });
       }
 
       /* FILA */
@@ -1869,6 +2291,10 @@ client.on("interactionCreate", async interaction => {
         db.config.analystRoleId = roleId;
       }
 
+      if (interaction.customId === "set_streamer_role") {
+        db.config.streamerRoleId = roleId;
+      }
+
       saveDatabase();
 
       return interaction.update({
@@ -1990,6 +2416,9 @@ client.on("interactionCreate", async interaction => {
       if (interaction.customId === "bet_category") {
         db.config.betCategoryId = channelId;
       }
+      if (interaction.customId === "streamer_category") {
+        db.config.streamerCategoryId = channelId;
+      }
 
       saveDatabase();
       return interaction.update({
@@ -2002,7 +2431,100 @@ client.on("interactionCreate", async interaction => {
     ---------------------------------------------------- */
 
     if (interaction.isModalSubmit()) {
+      if (interaction.customId === "streamer_queue_create") {
+        if (!(await requireStreamer(interaction))) return;
+
+        const value = parseMoney(interaction.fields.getTextInputValue("streamer_value"));
+        const format = interaction.fields.getTextInputValue("streamer_format").trim().toLowerCase();
+        const description = interaction.fields.getTextInputValue("streamer_description").trim();
+
+        if (!Number.isFinite(value) || value <= 0) {
+          return deny(interaction, "❌ Informe um valor válido para a aposta.");
+        }
+
+        if (!FORMATS.includes(format)) {
+          return deny(interaction, "❌ Formato inválido. Use `1x1`, `2x2`, `3x3` ou `4x4`.");
+        }
+
+        if (!description) {
+          return deny(interaction, "❌ Informe a descrição ou as regras da fila.");
+        }
+
+        const existing = Object.values(db.streamerQueues).find(
+          queue => queue.guildId === interaction.guild.id && queue.streamerId === interaction.user.id
+        );
+
+        if (existing) {
+          return deny(interaction, "❌ Você já possui uma fila de Streamer ativa neste servidor.");
+        }
+
+        const queueId = `streamer-${interaction.user.id}-${Date.now()}`;
+        const queue = {
+          id: queueId,
+          guildId: interaction.guild.id,
+          streamerId: interaction.user.id,
+          channelId: interaction.channel.id,
+          messageId: null,
+          value: Number(value.toFixed(2)),
+          format,
+          description,
+          players: [],
+          activeMatchId: null,
+          createdAt: Date.now()
+        };
+
+        const sent = await interaction.channel.send({
+          embeds: [streamerQueueEmbed(queue, interaction.guild)],
+          components: streamerQueueComponents(queue)
+        });
+
+        queue.messageId = sent.id;
+        db.streamerQueues[queueId] = queue;
+        saveDatabase();
+
+        return interaction.reply({
+          content: `✅ Sua fila de Streamer foi criada neste canal: ${sent.url}`,
+          ephemeral: true
+        });
+      }
+
+      if (interaction.customId === "embed_builder") {
+        if (!isAdmin(interaction)) {
+          return deny(interaction, "❌ Apenas administradores podem usar este comando.");
+        }
+
+        const title = interaction.fields.getTextInputValue("embed_title").trim();
+        const description = interaction.fields.getTextInputValue("embed_description").trim();
+        const colorInput = interaction.fields.getTextInputValue("embed_color").trim();
+        const image = interaction.fields.getTextInputValue("embed_image").trim();
+        const footer = interaction.fields.getTextInputValue("embed_footer").trim();
+
+        const color = colorInput || db.config.embedColor || "#5865F2";
+        if (!/^#[0-9A-Fa-f]{6}$/.test(color)) {
+          return deny(interaction, "❌ A cor da embed deve estar no formato `#5865F2`.");
+        }
+
+        if (image && !validUrl(image)) {
+          return deny(interaction, "❌ A URL da imagem é inválida.");
+        }
+
+        const embed = new EmbedBuilder()
+          .setColor(color)
+          .setTitle(title)
+          .setDescription(description);
+
+        if (image) embed.setImage(image);
+        if (footer) embed.setFooter({ text: footer });
+
+        await interaction.channel.send({ embeds: [embed] });
+        return interaction.reply({
+          content: "✅ **Embed enviada com sucesso!**",
+          ephemeral: true
+        });
+      }
+
       /* PIX */
+
       if (interaction.customId.startsWith("pix_register|")) {
         if (!(await requireAdmin(interaction))) return;
 
@@ -2586,6 +3108,12 @@ setInterval(async () => {
 
       if (db.config.mediatorQueueChannelId) {
         await updateMediatorQueueMessage(guild);
+      }
+
+      for (const queue of Object.values(db.streamerQueues || {})) {
+        if (queue.channelId) {
+          await refreshStreamerQueueMessage(queue, guild);
+        }
       }
     }
   } catch (error) {
