@@ -784,12 +784,21 @@ async function createStreamerMatchChannel(guild, queue, playerId) {
   const streamerMember = await guild.members.fetch(queue.streamerId).catch(() => null);
   if (!streamerMember) return null;
 
-  const category = db.config.betCategoryId
-    ? await guild.channels.fetch(db.config.betCategoryId).catch(() => null)
+  // A sala privada do Influencer usa EXCLUSIVAMENTE a categoria configurada
+  // para Streamer. O acesso fica restrito ao Influencer e ao jogador chamado.
+  const category = db.config.streamerCategoryId
+    ? await guild.channels.fetch(db.config.streamerCategoryId).catch(() => null)
     : null;
 
   const overwrites = [
-    { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+    {
+      id: guild.roles.everyone.id,
+      deny: [
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.ReadMessageHistory
+      ]
+    },
     {
       id: queue.streamerId,
       allow: [
