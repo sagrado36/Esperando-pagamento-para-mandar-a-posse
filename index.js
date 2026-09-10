@@ -47,7 +47,6 @@ const {
   SlashCommandBuilder,
   PermissionFlagsBits,
   EmbedBuilder,
-  AttachmentBuilder,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
@@ -627,71 +626,53 @@ function mediatorControlButtons(betId) {
   ];
 }
 
-async function sendPixMessage(channel, bet) {
+function paymentEmbed(bet) {
   const pix = bet.mediatorId ? db.pix[bet.mediatorId] : null;
 
   if (!pix) {
-    return channel.send({
-      content: [
-        "💳 **PAGAMENTO VIA PIX**",
+    return makeEmbed(
+      "💳 PAGAMENTO VIA PIX",
+      [
+        "Os dois jogadores confirmaram a aposta.",
         "",
-        "Os dois jogadores confirmaram a aposta. Realize o pagamento abaixo e aguarde o Mediador.",
+        `💰 **Valor por jogador:** ${money(bet.value)}`,
+        `🏆 **Total da aposta:** ${money(bet.value * 2)}`,
         "",
-        "👥 **JOGADORES**",
-        bet.players.map((id, index) => `${index + 1}. <@${id}> — ✅ Confirmou`).join("\n"),
-        "",
-        `💰 **Cada jogador:** ${money(bet.value)}`,
-        `💵 **Total da aposta:** ${money(bet.value * 2)}`,
-        "",
-        "⚠️ **PIX DO MEDIADOR NÃO CADASTRADO**",
-        "O Mediador responsável ainda não possui dados Pix cadastrados."
+        "⚠️ **PIX NÃO CONFIGURADO**",
+        "Nenhum ADM possui cadastro Pix.",
+        "Um ADM deve usar `/cadastro` para cadastrar os dados de pagamento."
       ].join("\n")
-    }).catch(() => {});
+    );
   }
 
-  const lines = [
-    "💳 **PAGAMENTO VIA PIX**",
-    "",
-    "Os dois jogadores confirmaram a aposta. Realize o pagamento abaixo e aguarde o Mediador.",
-    "",
-    "👥 **JOGADORES**",
-    bet.players.map((id, index) => `${index + 1}. <@${id}> — ✅ Confirmou`).join("\n"),
-    "",
-    `💰 **Cada jogador:** ${money(bet.value)}`,
-    `💵 **Total da aposta:** ${money(bet.value * 2)}`,
-    "",
-    "👤 **RESPONSÁVEL PELO PIX (MEDIADOR)**",
-    `• Nome: **${pix.name}**`,
-    `• Chave Pix: \`${pix.key}\``,
-    "",
-    "📌 Após pagar, não envie comprovante no chat sem orientação do Mediador."
-  ];
+  const result = makeEmbed(
+    "💳 PAGAMENTO VIA PIX",
+    [
+      "Os dois jogadores confirmaram a aposta. Realize o pagamento abaixo e aguarde o Mediador.",
+      "",
+      "👥 **JOGADORES**",
+      bet.players.map((id, index) => `${index + 1}. <@${id}> — ✅ Confirmou`).join("\n"),
+      "",
+      "💰 **VALORES**",
+      `• Cada jogador: **${money(bet.value)}**`,
+      `• Total da aposta: **${money(bet.value * 2)}**`,
+      "",
+      "👤 **RESPONSÁVEL PELO PIX**",
+      `• Nome: **${pix.name}**`,
+      `• Chave Pix: \`${pix.key}\``,
+      "",
+      "📌 Após pagar, não envie comprovante no chat sem orientação do Mediador."
+    ].join("\n")
+  );
 
-  const payload = { content: lines.join("\n") };
-
-  // O QR é enviado como arquivo de imagem em uma mensagem normal, sem Embed.
-  // Isso evita o problema de setImage() não renderizar o QR em alguns links.
   if (pix.qr && validUrl(pix.qr)) {
-    try {
-      const response = await fetch(pix.qr);
-      if (response.ok) {
-        const contentType = response.headers.get("content-type") || "image/png";
-        const ext = contentType.includes("jpeg") || contentType.includes("jpg") ? "jpg" : "png";
-        const buffer = Buffer.from(await response.arrayBuffer());
-        payload.files = [
-          new AttachmentBuilder(buffer, { name: `pix-qrcode.${ext}` })
-        ];
-      } else {
-        lines.push(`📷 **QR Code:** ${pix.qr}`);
-        payload.content = lines.join("\n");
-      }
-    } catch {
-      lines.push(`📷 **QR Code:** ${pix.qr}`);
-      payload.content = lines.join("\n");
-    }
+    result.addFields({
+      name: "🔗 Link do QR Code",
+      value: pix.qr
+    });
   }
 
-  return channel.send(payload).catch(() => {});
+  return result;
 }
 
 async function createPrivateBetChannel(guild, bet) {
@@ -813,37 +794,28 @@ async function createBetFromQueue(interaction, queue) {
 
   bet.channelId = channel.id;
 
-  const betMessages = [
-    channel.send({
-      content: players.map(id => `<@${id}>`).join(" "),
-      embeds: [betEmbed(bet)],
-      components: betButtons(id)
-    })
-  ];
+  await channel.send({
+    content: players.map(id => `<@${id}>`).join(" "),
+    embeds: [betEmbed(bet)],
+    components: betButtons(id)
+  });
 
   if (bet.mediatorId) {
-    betMessages.push(
-      channel.send({
-        embeds: [
-          makeEmbed(
-            "👨‍⚖️ MEDIADOR ATRIBUÍDO",
-            [
-              `O sistema atribuiu <@${bet.mediatorId}> pelo rodízio automático.`,
-              "",
-              "🔒 O acesso ao canal e ao painel será liberado somente depois que os 2 jogadores confirmarem."
-            ].join("\n")
-          )
-        ]
-      })
-    );
+    await channel.send({
+      embeds: [
+        makeEmbed(
+          "👨‍⚖️ MEDIADOR ATRIBUÍDO",
+          [
+            `O sistema atribuiu <@${bet.mediatorId}> pelo rodízio automático.`,
+            "",
+            "🔒 O acesso ao canal será liberado depois que os 2 jogadores confirmarem. Para abrir o painel, o Mediador deve usar **.med** neste canal."
+          ].join("\n")
+        )
+      ]
+    });
   }
 
-  await Promise.all(betMessages);
-
   saveDatabase();
-
-  // Atualiza a fila sem bloquear a resposta da interação.
-  void refreshQueueMessage(queue, interaction.guild);
 
   return bet;
 }
@@ -1095,7 +1067,7 @@ client.on("messageCreate", async message => {
         return message.reply("🔒 O painel do Mediador será liberado somente após os 2 jogadores confirmarem.");
       }
 
-      const panel = {
+      return message.reply({
         embeds: [
           makeEmbed(
             "👨‍⚖️ PAINEL DO MEDIADOR",
@@ -1105,22 +1077,12 @@ client.on("messageCreate", async message => {
               `💰 **Valor:** ${money(bet.value)}`,
               `💵 **Pagamento ao vencedor:** ${money(bet.value * 2)}`,
               "",
-              "Use o menu abaixo para administrar a aposta.",
-              "🔒 Este painel é privado e só pode ser usado pelo Mediador responsável."
+              "Use os botões abaixo para administrar a aposta."
             ].join("\n")
           )
         ],
         components: mediatorPanelComponents(bet.id)
-      };
-
-      // O painel não pode ser enviado no canal, pois mensagens comuns são visíveis
-      // para todos. Enviamos o painel diretamente para a DM do Mediador.
-      try {
-        await message.author.send(panel);
-        return message.reply("✅ O painel privado do Mediador foi enviado na sua DM.");
-      } catch {
-        return message.reply("❌ Não consegui enviar o painel na sua DM. Ative as mensagens diretas deste servidor e tente novamente.");
-      }
+      });
     }
     if (command === ".p") {
       const stats = userStats(message.author.id);
@@ -1553,7 +1515,7 @@ client.on("interactionCreate", async interaction => {
         ) {
           queue.players.pop();
           saveDatabase();
-          void refreshQueueMessage(queue, interaction.guild);
+          await refreshQueueMessage(queue, interaction.guild);
           return interaction.editReply({
             content: "❌ Não há Mediador disponível no momento. A aposta não pode ser puxada.",
             components: []
@@ -1575,7 +1537,7 @@ client.on("interactionCreate", async interaction => {
           });
         }
 
-        void refreshQueueMessage(queue, interaction.guild);
+        await refreshQueueMessage(queue, interaction.guild);
 
         await interaction.editReply({
           content:
@@ -1600,7 +1562,7 @@ client.on("interactionCreate", async interaction => {
         );
 
         saveDatabase();
-        void refreshQueueMessage(queue, interaction.guild);
+        await refreshQueueMessage(queue, interaction.guild);
 
         return interaction.reply({
           content:
@@ -1613,7 +1575,6 @@ client.on("interactionCreate", async interaction => {
 
       /* FILA MEDIADORES */
       if (action === "mediator_join") {
-        await interaction.deferReply({ ephemeral: true });
         if (!(await requireMediator(interaction))) return;
 
         if (!db.mediatorQueue.includes(interaction.user.id)) {
@@ -1621,11 +1582,11 @@ client.on("interactionCreate", async interaction => {
         }
 
         saveDatabase();
-        void updateMediatorQueueMessage(interaction.guild);
+        await updateMediatorQueueMessage(interaction.guild);
 
-        return interaction.editReply({
+        return interaction.reply({
           content: "✅ Você entrou na fila de Mediadores.",
-          components: []
+          ephemeral: true
         });
       }
 
@@ -1734,30 +1695,10 @@ client.on("interactionCreate", async interaction => {
         }
 
         // PIX é enviado como nova mensagem, preservando o painel de confirmação.
-        await sendPixMessage(interaction.channel, bet);
+        await interaction.channel.send({ embeds: [paymentEmbed(bet)] }).catch(() => {});
 
-        if (bet.mediatorId) {
-          const mediator = await client.users.fetch(bet.mediatorId).catch(() => null);
-          if (mediator) {
-            await mediator.send({
-              embeds: [
-                makeEmbed(
-                  "👨‍⚖️ CONTROLE DO MEDIADOR",
-                  [
-                    "Os dois jogadores confirmaram. O acesso do Mediador foi liberado.",
-                    "",
-                    `🎮 **Formato:** ${bet.format}`,
-                    `📱 **Modalidade:** ${modalityName(bet.modality)}`,
-                    `💰 **Valor:** ${money(bet.value)}`,
-                    "",
-                    "🔒 Este painel é privado e só pode ser usado pelo Mediador responsável."
-                  ].join("\n")
-                )
-              ],
-              components: mediatorPanelComponents(bet.id)
-            }).catch(() => {});
-          }
-        }
+        // O painel do Mediador não é enviado automaticamente.
+        // Ele só aparece quando o Mediador usar .med neste canal.
 
         saveDatabase();
         return interaction.editReply({
@@ -2548,15 +2489,11 @@ client.on("interactionCreate", async interaction => {
             new StringSelectMenuBuilder()
               .setCustomId(`${choice === "winner" ? "result_normal" : "result_wo"}|${bet.id}`)
               .setPlaceholder("👥 Escolha o jogador")
-              .addOptions(await Promise.all(bet.players.map(async (id, index) => {
-                const member = await interaction.guild.members.fetch(id).catch(() => null);
-                const displayName = member?.displayName || member?.user?.username || `Jogador ${index + 1}`;
-                return {
-                  label: displayName.slice(0, 100),
-                  value: id,
-                  description: `Selecionar ${displayName}`.slice(0, 100),
-                  emoji: choice === "winner" ? "🏆" : "🚫"
-                };
+              .addOptions(bet.players.map((id, index) => ({
+                label: `Jogador ${index + 1}`,
+                value: id,
+                description: "Selecionar este jogador",
+                emoji: choice === "winner" ? "🏆" : "🚫"
               })))
           )],
           ephemeral: true
