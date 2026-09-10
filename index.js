@@ -243,31 +243,14 @@ function userStats(userId) {
 
 function configEmbed() {
   const c = db.config;
-
-  return makeEmbed(
-    "⚙️ CONFIGURAÇÃO DO BOT",
-    [
-      "Configure o sistema usando os botões abaixo.",
-      "",
-      "🛡️ **EQUIPE**",
-      `• Mediador: ${c.mediatorRoleId ? `<@&${c.mediatorRoleId}>` : "❌ Não configurado"}`,
-      `• Analista: ${c.analystRoleId ? `<@&${c.analystRoleId}>` : "❌ Não configurado"}`,
-      `• Administradores: **${c.admins.length}/20**`,
-      "",
-      "💰 **APOSTAS**",
-      `• Taxa: **${money(c.fee)}**`,
-      `• Categoria: ${c.betCategoryId ? `<#${c.betCategoryId}>` : "❌ Não configurada"}`,
-      "",
-      "📢 **CANAIS**",
-      `• Mobile: ${c.ssmobChannelId ? `<#${c.ssmobChannelId}>` : "❌ Não configurado"}`,
-      `• Emulador: ${c.ssemuChannelId ? `<#${c.ssemuChannelId}>` : "❌ Não configurado"}`,
-      `• Fila de Mediadores: ${c.mediatorQueueChannelId ? `<#${c.mediatorQueueChannelId}>` : "❌ Não configurada"}`,
-      "",
-      "🎨 **APARÊNCIA**",
-      `• Cor: \`${c.embedColor}\``,
-      `• Foto do bot: ${c.profileImage ? "✅ Configurada" : "❌ Não configurada"}`
-    ].join("\n")
-  );
+  return makeEmbed("⚙️ CONFIG DO BOT", [
+    `🛡️ **Equipe:** ${c.mediatorRoleId ? `<@&${c.mediatorRoleId}>` : "❌"} • ${c.analystRoleId ? `<@&${c.analystRoleId}>` : "❌"}`,
+    `👑 **ADMs:** ${c.admins.length}/20`,
+    `💰 **Taxa:** ${money(c.fee)} • **Categoria:** ${c.betCategoryId ? `<#${c.betCategoryId}>` : "❌"}`,
+    `📢 **Filas:** ${c.ssmobChannelId ? `<#${c.ssmobChannelId}>` : "❌"} • ${c.ssemuChannelId ? `<#${c.ssemuChannelId}>` : "❌"}`,
+    `👨‍⚖️ **Mediadores:** ${c.mediatorQueueChannelId ? `<#${c.mediatorQueueChannelId}>` : "❌"}`,
+    `🎨 **Cor:** \`${c.embedColor}\` • **Foto:** ${c.profileImage ? "✅" : "❌"}`
+  ].join("\\n"));
 }
 
 function makeEmbed(title, description = "") {
@@ -275,13 +258,11 @@ function makeEmbed(title, description = "") {
     .setColor(db.config.embedColor || "#5865F2")
     .setTitle(title)
     .setDescription(String(description).trim())
-    .setFooter({ text: "🎮 Sistema de Apostas • Painel oficial" })
-    .setTimestamp();
+    .setFooter({ text: "🎮 Sistema de Apostas" });
 
   if (db.config.profileImage && validUrl(db.config.profileImage)) {
     result.setThumbnail(db.config.profileImage);
   }
-
   return result;
 }
 
@@ -310,7 +291,6 @@ async function deny(interaction, text) {
   if (interaction.replied || interaction.deferred) {
     return interaction.followUp({ content: text, ephemeral: true }).catch(() => {});
   }
-
   return interaction.reply({ content: text, ephemeral: true }).catch(() => {});
 }
 
@@ -349,81 +329,63 @@ function queueId(format, modality, value, mode) {
 
 function getQueue(format, modality, value, mode) {
   const id = queueId(format, modality, value, mode);
-
   if (!db.queues[id]) {
     db.queues[id] = {
-      id,
-      format,
-      modality,
-      value: Number(value),
-      mode,
-      players: [],
-      messageId: null,
-      channelId: null
+      id, format, modality, value: Number(value), mode,
+      players: [], messageId: null, channelId: null
     };
   }
-
   return db.queues[id];
+}
+
+async function playerSelectOptions(guild, players, emoji) {
+  return Promise.all(players.map(async (id) => {
+    let member = guild.members.cache.get(id);
+    if (!member) member = await guild.members.fetch(id).catch(() => null);
+    const name = String(member?.displayName || member?.user?.username || `ID ${id}`)
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 100);
+
+    return {
+      label: name || `ID ${id}`,
+      value: id,
+      description: "Selecionar este jogador",
+      emoji
+    };
+  }));
 }
 
 function queueDescription(queue) {
   const total = requiredPlayers(queue.format);
   const filled = queue.players.length;
   const remaining = Math.max(total - filled, 0);
-
   const playersText = filled
-    ? queue.players.map((id, index) => `**${index + 1}.** <@${id}>`).join("\n")
-    : "_Nenhum jogador entrou ainda._";
+    ? queue.players.map((id, index) => `**${index + 1}.** <@${id}>`).join("\\n")
+    : "_Nenhum jogador._";
 
   return [
-    `**📱 Modalidade**\n${modalityName(queue.modality)}`,
-    `**🎮 Formato**\n${queue.format}`,
-    `**💰 Valor**\n${money(queue.value)}`,
-    "",
-    `**👥 Jogadores** · ${filled}/${total}`,
+    `🎮 **${queue.format}** • ${modalityName(queue.modality)} • **${money(queue.value)}**`,
+    `👥 **Jogadores:** ${filled}/${total}`,
     playersText,
-    "",
-    remaining > 0
-      ? `⏳ **Faltam ${remaining} jogador${remaining === 1 ? "" : "es"} para iniciar.**`
-      : "🟢 **Fila completa! A aposta será iniciada.**"
-  ].join("\n");
+    remaining > 0 ? `⏳ Faltam **${remaining}** jogador${remaining === 1 ? "" : "es"}.` : "🟢 **Fila completa!**"
+  ].join("\\n");
 }
 
 function queueComponents(queue) {
   if (queue.format === "1x1") {
     return [
       new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId(`queue_join|${queue.id}|gelo_normal`)
-          .setLabel("Gelo Normal")
-          .setEmoji("🧊")
-          .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-          .setCustomId(`queue_join|${queue.id}|gelo_infinito`)
-          .setLabel("Gelo Infinito")
-          .setEmoji("♾️")
-          .setStyle(ButtonStyle.Primary),
-        new ButtonBuilder()
-          .setCustomId(`queue_leave|${queue.id}`)
-          .setLabel("Sair da fila")
-          .setEmoji("🚪")
-          .setStyle(ButtonStyle.Danger)
+        new ButtonBuilder().setCustomId(`queue_join|${queue.id}|gelo_normal`).setLabel("Gelo Normal").setEmoji("🧊").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`queue_join|${queue.id}|gelo_infinito`).setLabel("Gelo Infinito").setEmoji("♾️").setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`queue_leave|${queue.id}`).setLabel("Sair").setEmoji("🚪").setStyle(ButtonStyle.Danger)
       )
     ];
   }
-
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`queue_join|${queue.id}`)
-        .setLabel("Entrar na fila")
-        .setEmoji("🎮")
-        .setStyle(ButtonStyle.Success),
-      new ButtonBuilder()
-        .setCustomId(`queue_leave|${queue.id}`)
-        .setLabel("Sair da fila")
-        .setEmoji("🚪")
-        .setStyle(ButtonStyle.Danger)
+      new ButtonBuilder().setCustomId(`queue_join|${queue.id}`).setLabel("Entrar").setEmoji("🎮").setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`queue_leave|${queue.id}`).setLabel("Sair").setEmoji("🚪").setStyle(ButtonStyle.Danger)
     )
   ];
 }
@@ -431,157 +393,73 @@ function queueComponents(queue) {
 function queueOneVsOneModeComponents(format, modality, value, channelId) {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`publish_queue|${format}|${modality}|${value}|gelo_normal|${channelId}`)
-        .setLabel("Gelo Normal")
-        .setEmoji("🧊")
-        .setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder()
-        .setCustomId(`publish_queue|${format}|${modality}|${value}|gelo_infinito|${channelId}`)
-        .setLabel("Gelo Infinito")
-        .setEmoji("♾️")
-        .setStyle(ButtonStyle.Primary)
+      new ButtonBuilder().setCustomId(`publish_queue|${format}|${modality}|${value}|gelo_normal|${channelId}`).setLabel("Gelo Normal").setEmoji("🧊").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`publish_queue|${format}|${modality}|${value}|gelo_infinito|${channelId}`).setLabel("Gelo Infinito").setEmoji("♾️").setStyle(ButtonStyle.Primary)
     )
   ];
 }
 
 function mediatorQueueEmbed() {
   const list = db.mediatorQueue.length
-    ? db.mediatorQueue.map((id, index) => `**${index + 1}.** <@${id}>`).join("\n")
-    : "_Nenhum Mediador está aguardando._";
-
+    ? db.mediatorQueue.map((id, index) => `**${index + 1}.** <@${id}>`).join("\\n")
+    : "_Nenhum Mediador aguardando._";
   const next = db.mediatorQueue.length > 0
     ? db.mediatorQueue[db.mediatorRotation % db.mediatorQueue.length]
     : null;
 
-  return makeEmbed(
-    "👨‍⚖️ FILA DE MEDIADORES",
-    [
-      "**Disponibilidade**\nMediadores disponíveis para receber novas apostas.",
-      "",
-      "**📋 ORDEM DE ATENDIMENTO**",
-      list,
-      "",
-      next
-        ? `**🎯 Próximo atendimento**\n<@${next}>`
-        : "**🎯 Próximo atendimento**\n_Nenhum Mediador disponível._",
-      "",
-      "🔄 A distribuição segue automaticamente a ordem da fila."
-    ].join("\n")
-  );
+  return makeEmbed("👨‍⚖️ FILA DE MEDIADORES", [
+    `👥 **Na fila:** ${db.mediatorQueue.length}`,
+    list,
+    `🎯 **Próximo:** ${next ? `<@${next}>` : "_Nenhum_"}`
+  ].join("\\n"));
 }
 
 function mediatorQueueComponents() {
-  return [
-    new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId("mediator_join")
-        .setLabel("Entrar")
-        .setEmoji("➕")
-        .setStyle(ButtonStyle.Success),
-      new ButtonBuilder()
-        .setCustomId("mediator_leave")
-        .setLabel("Sair")
-        .setEmoji("🚪")
-        .setStyle(ButtonStyle.Danger)
-    )
-  ];
+  return safeMediatorQueueComponents();
 }
 
-/* discord.js ButtonBuilder não possui .Emoji; corrigido dinamicamente abaixo. */
 function safeMediatorQueueComponents() {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId("mediator_join")
-        .setLabel("Entrar")
-        .setEmoji("➕")
-        .setStyle(ButtonStyle.Success),
-      new ButtonBuilder()
-        .setCustomId("mediator_leave")
-        .setLabel("Sair")
-        .setEmoji("🚪")
-        .setStyle(ButtonStyle.Danger)
+      new ButtonBuilder().setCustomId("mediator_join").setLabel("Entrar").setEmoji("➕").setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId("mediator_leave").setLabel("Sair").setEmoji("🚪").setStyle(ButtonStyle.Danger)
     )
   ];
 }
 
 async function updateMediatorQueueMessage(guild) {
   const channel = await getChannel(guild, db.config.mediatorQueueChannelId);
-
   if (!channel || !channel.isTextBased()) return;
-
   let message = null;
-
   if (db.config.mediatorQueueMessageId) {
-    message = await channel.messages
-      .fetch(db.config.mediatorQueueMessageId)
-      .catch(() => null);
+    message = await channel.messages.fetch(db.config.mediatorQueueMessageId).catch(() => null);
   }
-
   if (!message) {
-    message = await channel.send({
-      embeds: [mediatorQueueEmbed()],
-      components: safeMediatorQueueComponents()
-    });
-
+    message = await channel.send({ embeds: [mediatorQueueEmbed()], components: safeMediatorQueueComponents() });
     db.config.mediatorQueueMessageId = message.id;
   } else {
-    await message.edit({
-      embeds: [mediatorQueueEmbed()],
-      components: safeMediatorQueueComponents()
-    }).catch(() => {});
+    await message.edit({ embeds: [mediatorQueueEmbed()], components: safeMediatorQueueComponents() }).catch(() => {});
   }
-
   saveDatabase();
 }
 
 function betEmbed(bet) {
-  return makeEmbed(
-    "🎮 APOSTA INICIADA",
-    [
-      "**A partida foi criada com sucesso.**",
-      "",
-      "**📌 INFORMAÇÕES**",
-      `🎮 **Formato:** ${bet.format}`,
-      `📱 **Modalidade:** ${modalityName(bet.modality)}`,
-      `💰 **Valor por jogador:** ${money(bet.value)}`,
-      `🧊 **Modo:** ${bet.mode === "gelo_infinito" ? "Gelo Infinito" : "Gelo Normal"}`,
-      "",
-      "**👥 JOGADORES**",
-      bet.players.map((id, index) => `**${index + 1}.** <@${id}>`).join("\n"),
-      "",
-      bet.mediatorId
-        ? `**👨‍⚖️ Mediador:** <@${bet.mediatorId}>`
-        : "**👨‍⚖️ Mediador:** _aguardando disponibilidade_",
-      "",
-      "**✅ CONFIRMAÇÕES**",
-      bet.players.map((id, index) =>
-        `**${index + 1}.** <@${id}> — ${bet.confirmedBy.includes(id) ? "✅ Confirmado" : "⏳ Aguardando"}`
-      ).join("\n"),
-      "",
-      bet.confirmedBy.length === bet.players.length
-        ? "🟢 **Tudo certo! Os dois jogadores confirmaram.**"
-        : "🔒 **O Mediador só terá acesso após as duas confirmações.**",
-      "",
-      "❌ Para cancelar, use o botão abaixo."
-    ].join("\n")
-  );
+  return makeEmbed("🎮 APOSTA", [
+    `🎮 **${bet.format}** • ${modalityName(bet.modality)} • **${money(bet.value)}**`,
+    `🧊 **Modo:** ${bet.mode === "gelo_infinito" ? "Gelo Infinito" : "Gelo Normal"}`,
+    `👥 **Jogadores:**`,
+    bet.players.map((id, index) => `**${index + 1}.** <@${id}>`).join("\\n"),
+    `👨‍⚖️ **Mediador:** ${bet.mediatorId ? `<@${bet.mediatorId}>` : "_aguardando_"}`,
+    `✅ **Confirmações:** ${bet.confirmedBy.length}/${bet.players.length}`,
+    bet.confirmedBy.length === bet.players.length ? "🟢 **Confirmada.**" : "⏳ **Aguardando confirmação.**"
+  ].join("\\n"));
 }
 
 function betButtons(betId) {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`bet_confirm|${betId}`)
-        .setLabel("Confirmar")
-        .setEmoji("✅")
-        .setStyle(ButtonStyle.Success),
-      new ButtonBuilder()
-        .setCustomId(`bet_cancel|${betId}`)
-        .setLabel("Cancelar")
-        .setEmoji("❌")
-        .setStyle(ButtonStyle.Danger)
+      new ButtonBuilder().setCustomId(`bet_confirm|${betId}`).setLabel("Confirmar").setEmoji("✅").setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`bet_cancel|${betId}`).setLabel("Cancelar").setEmoji("❌").setStyle(ButtonStyle.Danger)
     )
   ];
 }
@@ -589,90 +467,98 @@ function betButtons(betId) {
 function mediatorPanelComponents(betId) {
   return [
     new ActionRowBuilder().addComponents(
-      new StringSelectMenuBuilder()
-        .setCustomId(`med_panel|${betId}`)
-        .setPlaceholder("👨‍⚖️ Selecione uma ação do Mediador")
+      new StringSelectMenuBuilder().setCustomId(`med_panel|${betId}`).setPlaceholder("Selecione uma ação")
         .addOptions([
-          { label: "Escolher vencedor", value: "winner", emoji: "🏆", description: "Selecionar um dos 2 jogadores" },
-          { label: "Vitória por W.O.", value: "wo", emoji: "🚫", description: "Selecionar um dos 2 jogadores" },
-          { label: "Enviar ID e senha da sala", value: "room", emoji: "🎮", description: "Enviar os dados da sala" },
-          { label: "Finalizar aposta", value: "finish", emoji: "🏁", description: "Finalizar a aposta" }
+          { label: "Escolher vencedor", value: "winner", emoji: "🏆" },
+          { label: "Vitória por W.O.", value: "wo", emoji: "🚫" },
+          { label: "Enviar ID e senha", value: "room", emoji: "🎮" },
+          { label: "Finalizar aposta", value: "finish", emoji: "🏁" }
         ])
     )
   ];
 }
 
-function mediatorControlButtons(betId) {
-  return [
-    new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`med_winner|${betId}`)
-        .setLabel("Escolher vencedor")
-        .setEmoji("🏆")
-        .setStyle(ButtonStyle.Success),
-      new ButtonBuilder()
-        .setCustomId(`med_wo|${betId}`)
-        .setLabel("Vitória por W.O.")
-        .setEmoji("🚫")
-        .setStyle(ButtonStyle.Primary),
-      new ButtonBuilder()
-        .setCustomId(`med_finish|${betId}`)
-        .setLabel("Finalizar aposta")
-        .setEmoji("🏁")
-        .setStyle(ButtonStyle.Danger)
-    ),
-    new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`room_credentials|${betId}`)
-        .setLabel("Enviar ID e senha da sala")
-        .setEmoji("🎮")
-        .setStyle(ButtonStyle.Secondary)
-    )
-  ];
-}
-
-function paymentEmbed(bet) {
+function paymentMessage(bet) {
   const entries = bet.mediatorId && db.pix[bet.mediatorId]
     ? [[bet.mediatorId, db.pix[bet.mediatorId]]]
     : Object.entries(db.pix);
-
   const amountToPay = Number((Number(bet.value) + Number(db.config.fee || 0)).toFixed(2));
 
   if (!entries.length) {
-    return makeEmbed(
-      "💳 PAGAMENTO VIA PIX",
-      [
-        "**Pagamento da aposta**",
+    return {
+      content: [
+        "💳 **PAGAMENTO DA APOSTA**",
+        "━━━━━━━━━━━━━━━━━━━━",
+        `💰 **Valor:** ${money(amountToPay)}`,
         "",
-        `💰 **Valor a pagar:** ${money(amountToPay)}`,
-        `🏆 **Valor da aposta:** ${money(Number(bet.value) * 2)}`,
-        "",
-        "⚠️ **PIX NÃO CONFIGURADO**",
-        "Nenhum Mediador possui cadastro Pix para esta aposta.",
-        "",
-        "Um ADM deve cadastrar os dados de pagamento usando `/cadastro`."
+        "⚠️ **PIX não configurado.**",
+        "Um ADM deve cadastrar o Pix em `/cadastro`.",
+        "━━━━━━━━━━━━━━━━━━━━"
       ].join("\n")
-    );
+    };
   }
 
   const [, pix] = entries[0];
-  return makeEmbed(
-    "💳 PAGAMENTO VIA PIX",
-    [
-      "**Pagamento da aposta**",
-      "",
-      `💰 **VALOR A PAGAR**\n**${money(amountToPay)}**`,
-      "",
-      `👤 **Titular**\n${pix.name}`,
-      `🔑 **Chave Pix**\n\`${pix.key}\``,
-      "",
-      pix.qr && validUrl(pix.qr)
-        ? `🔗 **Link do QR Code**\n${pix.qr}`
-        : "⚠️ **Link do QR Code não cadastrado ou inválido.**",
-      "",
-      "📌 **Confira os dados antes de realizar o pagamento.**"
-    ].join("\n")
-  );
+  const content = [
+    "💳 **PAGAMENTO DA APOSTA**",
+    "━━━━━━━━━━━━━━━━━━━━",
+    `💰 **Valor:** ${money(amountToPay)}`,
+    `👤 **Titular:** ${pix.name}`,
+    `🔑 **Chave PIX:** \`${pix.key}\``,
+    pix.qr && validUrl(pix.qr)
+      ? `🔗 **Link do QR Code:** ${pix.qr}`
+      : "⚠️ **QR Code não cadastrado.**",
+    "",
+    "📌 **Faça o pagamento e aguarde a orientação do Mediador.**",
+    "━━━━━━━━━━━━━━━━━━━━"
+  ].join("\n");
+
+  const result = { content };
+
+  // O pagamento fica em mensagem normal. O QR aparece separadamente
+  // apenas como imagem, sem colocar os dados de pagamento em embed.
+  if (pix.qr && validUrl(pix.qr)) {
+    result.embeds = [new EmbedBuilder().setImage(pix.qr).setColor(db.config.embedColor || "#5865F2")];
+  }
+
+  return result;
+}
+
+async function createPrivateAnalysisChannel(guild, analysis) {
+  const category = db.config.betCategoryId
+    ? await guild.channels.fetch(db.config.betCategoryId).catch(() => null)
+    : null;
+
+  const overwrites = [
+    {
+      id: guild.roles.everyone.id,
+      deny: [PermissionFlagsBits.ViewChannel]
+    },
+    {
+      id: analysis.requesterId,
+      allow: [
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.ReadMessageHistory
+      ]
+    },
+    {
+      id: analysis.analystId,
+      allow: [
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.ReadMessageHistory,
+        PermissionFlagsBits.ManageMessages
+      ]
+    }
+  ];
+
+  return guild.channels.create({
+    name: `analise-${analysis.type.toLowerCase()}-${analysis.id.slice(-6)}`,
+    type: ChannelType.GuildText,
+    parent: category?.type === ChannelType.GuildCategory ? category.id : undefined,
+    permissionOverwrites: overwrites
+  });
 }
 
 async function createPrivateBetChannel(guild, bet) {
@@ -686,6 +572,16 @@ async function createPrivateBetChannel(guild, bet) {
       deny: [PermissionFlagsBits.ViewChannel]
     }
   ];
+
+  // Nenhum Mediador pode ver a aposta apenas por possuir o cargo.
+  // Somente o Mediador que foi sorteado para esta aposta recebe acesso
+  // individualmente depois que todos os jogadores confirmarem.
+  if (db.config.mediatorRoleId) {
+    overwrites.push({
+      id: db.config.mediatorRoleId,
+      deny: [PermissionFlagsBits.ViewChannel]
+    });
+  }
 
   for (const userId of bet.players) {
     overwrites.push({
@@ -799,24 +695,6 @@ async function createBetFromQueue(interaction, queue) {
     embeds: [betEmbed(bet)],
     components: betButtons(id)
   });
-
-  if (bet.mediatorId) {
-    await channel.send({
-      embeds: [
-        makeEmbed(
-          "👨‍⚖️ MEDIADOR ATRIBUÍDO",
-          [
-            "**Mediador responsável pela aposta**",
-            "",
-            `👨‍⚖️ **Mediador:** <@${bet.mediatorId}>`,
-            "🔒 **Acesso:** liberado após as 2 confirmações.",
-            "",
-            "_O sistema selecionou este Mediador automaticamente pelo rodízio._"
-          ].join("\n")
-        )
-      ]
-    });
-  }
 
   saveDatabase();
 
@@ -1639,8 +1517,52 @@ client.on("interactionCreate", async interaction => {
           );
         }
 
-        analysis.status = "assigned";
         analysis.analystId = interaction.user.id;
+
+        // A solicitação já está no canal privado configurado.
+        // Não crie outro canal: apenas adicione o Analista que assumiu.
+        const privateChannel = interaction.channel;
+
+        if (!privateChannel || !privateChannel.isTextBased()) {
+          analysis.analystId = null;
+          return deny(interaction, "❌ O canal privado da análise é inválido.");
+        }
+
+        try {
+          await privateChannel.permissionOverwrites.edit(analysis.analystId, {
+            ViewChannel: true,
+            SendMessages: true,
+            ReadMessageHistory: true,
+            ManageMessages: true
+          });
+        } catch (error) {
+          analysis.analystId = null;
+          console.error("❌ Não foi possível adicionar o Analista ao canal privado:", error);
+          return deny(
+            interaction,
+            "❌ Não foi possível adicionar o Analista ao canal privado. Verifique as permissões do bot."
+          );
+        }
+
+        analysis.channelId = privateChannel.id;
+        analysis.status = "assigned";
+
+        await privateChannel.send({
+          content: `<@${analysis.requesterId}> <@${analysis.analystId}>`,
+          embeds: [
+            makeEmbed(
+              "🔎 ANÁLISE EM ATENDIMENTO",
+              [
+                `📱 **Modalidade:** ${analysis.type}`,
+                `👤 **Solicitante:** <@${analysis.requesterId}>`,
+                `🔎 **Analista:** <@${analysis.analystId}>`,
+                "",
+                "🟢 **Status:** Em atendimento",
+                "💬 Este é o canal privado para tratar a análise."
+              ].join("\n")
+            )
+          ]
+        }).catch(() => {});
 
         saveDatabase();
 
@@ -1654,6 +1576,7 @@ client.on("interactionCreate", async interaction => {
                 `📱 **Modalidade:** ${analysis.type}`,
                 `👤 **Solicitante:** <@${analysis.requesterId}>`,
                 `🔎 **Analista responsável:** <@${interaction.user.id}>`,
+                `🔒 **Canal privado:** ${privateChannel}`,
                 "",
                 "🟢 **Status:** Em atendimento"
               ].join("\n")
@@ -1685,9 +1608,22 @@ client.on("interactionCreate", async interaction => {
           components: bet.confirmedBy.length < bet.players.length ? betButtons(bet.id) : []
         }).catch(() => {});
 
+        // Confirmação individual: aviso visual em verde no canal, sem remover o painel.
+        const confirmationEmbed = makeEmbed(
+          "✅ APOSTA CONFIRMADA",
+          [
+            `👤 **Jogador:** <@${interaction.user.id}>`,
+            "",
+            `🟢 **Confirmou a aposta com sucesso.**`,
+            `📋 **Confirmações:** ${bet.confirmedBy.length}/${bet.players.length}`
+          ].join("\n")
+        ).setColor("#57F287");
+
+        await interaction.channel.send({ embeds: [confirmationEmbed] }).catch(() => {});
+
         if (bet.confirmedBy.length < bet.players.length) {
           return interaction.editReply({
-            content: `✅ **${interaction.user.username}** confirmou. ${bet.confirmedBy.length}/${bet.players.length} jogadores confirmaram.`,
+            content: `✅ Você confirmou a aposta. ${bet.confirmedBy.length}/${bet.players.length} jogadores confirmaram.`,
             components: []
           });
         }
@@ -1707,13 +1643,12 @@ client.on("interactionCreate", async interaction => {
         }
 
         // PIX é enviado como nova mensagem, preservando o painel de confirmação.
-        await interaction.channel.send({ embeds: [paymentEmbed(bet)] }).catch(() => {});
+        await interaction.channel.send(paymentMessage(bet)).catch(() => {});
 
         if (bet.mediatorId) {
           await interaction.channel.send({
             content: `<@${bet.mediatorId}>`,
-            embeds: [makeEmbed("👨‍⚖️ CONTROLE DO MEDIADOR", "Os dois jogadores confirmaram. O acesso do Mediador foi liberado.")],
-            components: mediatorPanelComponents(bet.id)
+            embeds: [makeEmbed("👨‍⚖️ MEDIADOR LIBERADO", "Os dois jogadores confirmaram. Seu acesso à aposta foi liberado. Use **.med** neste canal para abrir o painel de controle.")]
           }).catch(() => {});
         }
 
@@ -1778,7 +1713,7 @@ client.on("interactionCreate", async interaction => {
           content: "🏆 Selecione um dos 2 jogadores:",
           components: [new ActionRowBuilder().addComponents(
             new StringSelectMenuBuilder().setCustomId(`result_normal|${bet.id}`).setPlaceholder("Escolher vencedor")
-              .addOptions(bet.players.map((id, index) => ({ label: `Jogador ${index + 1}`, value: id, description: "Selecionar este jogador", emoji: "🏆" })))
+              .addOptions(await playerSelectOptions(interaction.guild, bet.players, "🏆"))
           )], ephemeral: true
         });
       }
@@ -1804,7 +1739,7 @@ client.on("interactionCreate", async interaction => {
           content: "🚫 Selecione um dos 2 jogadores:",
           components: [new ActionRowBuilder().addComponents(
             new StringSelectMenuBuilder().setCustomId(`result_wo|${bet.id}`).setPlaceholder("Escolher vencedor por W.O.")
-              .addOptions(bet.players.map((id, index) => ({ label: `Jogador ${index + 1}`, value: id, description: "Selecionar este jogador", emoji: "🚫" })))
+              .addOptions(await playerSelectOptions(interaction.guild, bet.players, "🚫"))
           )], ephemeral: true
         });
       }
@@ -2397,7 +2332,7 @@ client.on("interactionCreate", async interaction => {
             "",
             "🏁 **Próximo passo:** finalize a aposta pelo painel do Mediador."
           ].join("\n"))],
-          components: mediatorPanelComponents(bet.id)
+          components: []
         });
       }
 
@@ -2512,12 +2447,11 @@ client.on("interactionCreate", async interaction => {
             new StringSelectMenuBuilder()
               .setCustomId(`${choice === "winner" ? "result_normal" : "result_wo"}|${bet.id}`)
               .setPlaceholder("👥 Escolha o jogador")
-              .addOptions(bet.players.map((id, index) => ({
-                label: `Jogador ${index + 1}`,
-                value: id,
-                description: "Selecionar este jogador",
-                emoji: choice === "winner" ? "🏆" : "🚫"
-              })))
+              .addOptions(await playerSelectOptions(
+                interaction.guild,
+                bet.players,
+                choice === "winner" ? "🏆" : "🚫"
+              ))
           )],
           ephemeral: true
         });
