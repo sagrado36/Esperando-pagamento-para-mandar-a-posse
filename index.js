@@ -626,53 +626,44 @@ function mediatorControlButtons(betId) {
   ];
 }
 
-function paymentEmbed(bet) {
+function paymentMessage(bet) {
   const pix = bet.mediatorId ? db.pix[bet.mediatorId] : null;
+  const amountToPay = Number((Number(bet.value) + Number(db.config.fee || 0)).toFixed(2));
 
   if (!pix) {
-    return makeEmbed(
-      "💳 PAGAMENTO VIA PIX",
-      [
-        "Os dois jogadores confirmaram a aposta.",
-        "",
-        `💰 **Valor por jogador:** ${money(bet.value)}`,
-        `🏆 **Total da aposta:** ${money(bet.value * 2)}`,
-        "",
-        "⚠️ **PIX NÃO CONFIGURADO**",
-        "Nenhum ADM possui cadastro Pix.",
-        "Um ADM deve usar `/cadastro` para cadastrar os dados de pagamento."
-      ].join("\n")
-    );
+    return [
+      "💳 **PAGAMENTO VIA PIX**",
+      "",
+      `💰 **VALOR A PAGAR: ${money(amountToPay)}**`,
+      "",
+      "⚠️ **PIX NÃO CONFIGURADO**",
+      "Nenhum Mediador possui cadastro Pix."
+    ].join("\n");
   }
 
-  const result = makeEmbed(
-    "💳 PAGAMENTO VIA PIX",
-    [
-      "Os dois jogadores confirmaram a aposta. Realize o pagamento abaixo e aguarde o Mediador.",
-      "",
-      "👥 **JOGADORES**",
-      bet.players.map((id, index) => `${index + 1}. <@${id}> — ✅ Confirmou`).join("\n"),
-      "",
-      "💰 **VALORES**",
-      `• Cada jogador: **${money(bet.value)}**`,
-      `• Total da aposta: **${money(bet.value * 2)}**`,
-      "",
-      "👤 **RESPONSÁVEL PELO PIX**",
-      `• Nome: **${pix.name}**`,
-      `• Chave Pix: \`${pix.key}\``,
-      "",
-      "📌 Após pagar, não envie comprovante no chat sem orientação do Mediador."
-    ].join("\n")
-  );
+  return [
+    "💳 **PAGAMENTO VIA PIX**",
+    "",
+    `💰 **VALOR A PAGAR: ${money(amountToPay)}**`,
+    "",
+    `👤 **Titular:** ${pix.name}`,
+    `🔑 **Chave Pix:** \`${pix.key}\``,
+    "",
+    pix.qr && validUrl(pix.qr) ? `📷 **QR Code:** ${pix.qr}` : "📷 **QR Code:** URL não cadastrada ou inválida."
+  ].join("\n");
+}
 
-  if (pix.qr && validUrl(pix.qr)) {
-    result.addFields({
-      name: "🔗 Link do QR Code",
-      value: pix.qr
-    });
-  }
-
-  return result;
+async function playerSelectOptions(guild, players, emoji, description) {
+  return Promise.all(players.map(async (id) => {
+    const member = await guild.members.fetch(id).catch(() => null);
+    const name = member?.displayName || member?.user?.username || `Usuário ${id}`;
+    return {
+      label: name.slice(0, 100),
+      value: id,
+      description,
+      emoji
+    };
+  }));
 }
 
 async function createPrivateBetChannel(guild, bet) {
@@ -808,7 +799,7 @@ async function createBetFromQueue(interaction, queue) {
           [
             `O sistema atribuiu <@${bet.mediatorId}> pelo rodízio automático.`,
             "",
-            "🔒 O acesso ao canal será liberado depois que os 2 jogadores confirmarem. Para abrir o painel, o Mediador deve usar **.med** neste canal."
+            "🔒 O acesso ao canal e ao painel será liberado somente depois que os 2 jogadores confirmarem."
           ].join("\n")
         )
       ]
@@ -1695,10 +1686,8 @@ client.on("interactionCreate", async interaction => {
         }
 
         // PIX é enviado como nova mensagem, preservando o painel de confirmação.
-        await interaction.channel.send({ embeds: [paymentEmbed(bet)] }).catch(() => {});
+        await interaction.channel.send({ content: paymentMessage(bet) }).catch(() => {});
 
-        // O painel do Mediador não é enviado automaticamente.
-        // Ele só aparece quando o Mediador usar .med neste canal.
 
         saveDatabase();
         return interaction.editReply({
@@ -1761,7 +1750,7 @@ client.on("interactionCreate", async interaction => {
           content: "🏆 Selecione um dos 2 jogadores:",
           components: [new ActionRowBuilder().addComponents(
             new StringSelectMenuBuilder().setCustomId(`result_normal|${bet.id}`).setPlaceholder("Escolher vencedor")
-              .addOptions(bet.players.map((id, index) => ({ label: `Jogador ${index + 1}`, value: id, description: "Selecionar este jogador", emoji: "🏆" })))
+              .addOptions(await playerSelectOptions(interaction.guild, bet.players, "🏆", "Selecionar este jogador"))
           )], ephemeral: true
         });
       }
@@ -1787,7 +1776,7 @@ client.on("interactionCreate", async interaction => {
           content: "🚫 Selecione um dos 2 jogadores:",
           components: [new ActionRowBuilder().addComponents(
             new StringSelectMenuBuilder().setCustomId(`result_wo|${bet.id}`).setPlaceholder("Escolher vencedor por W.O.")
-              .addOptions(bet.players.map((id, index) => ({ label: `Jogador ${index + 1}`, value: id, description: "Selecionar este jogador", emoji: "🚫" })))
+              .addOptions(await playerSelectOptions(interaction.guild, bet.players, "🚫", "Selecionar este jogador"))
           )], ephemeral: true
         });
       }
@@ -2082,22 +2071,17 @@ client.on("interactionCreate", async interaction => {
 
         saveDatabase();
 
-        const e = makeEmbed(
-          "💳 CADASTRO PIX",
-          [
+        return interaction.reply({
+          content: [
+            "💳 **CADASTRO PIX**",
+            "",
             `👤 **Usuário:** <@${userId}>`,
             `📝 **Nome:** ${name}`,
             `🔑 **Chave Pix:** \`${key}\``,
+            `📷 **QR Code:** ${qr}`,
             "",
-            "📷 **QR Code:** abaixo deste cadastro.",
             "✅ Cadastro salvo com sucesso."
-          ].join("\n")
-        );
-
-        e.setImage(qr);
-
-        return interaction.reply({
-          embeds: [e],
+          ].join("\n"),
           ephemeral: true
         });
       }
@@ -2489,12 +2473,12 @@ client.on("interactionCreate", async interaction => {
             new StringSelectMenuBuilder()
               .setCustomId(`${choice === "winner" ? "result_normal" : "result_wo"}|${bet.id}`)
               .setPlaceholder("👥 Escolha o jogador")
-              .addOptions(bet.players.map((id, index) => ({
-                label: `Jogador ${index + 1}`,
-                value: id,
-                description: "Selecionar este jogador",
-                emoji: choice === "winner" ? "🏆" : "🚫"
-              })))
+              .addOptions(await playerSelectOptions(
+                interaction.guild,
+                bet.players,
+                choice === "winner" ? "🏆" : "🚫",
+                "Selecionar este jogador"
+              ))
           )],
           ephemeral: true
         });
