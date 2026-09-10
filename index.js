@@ -998,15 +998,17 @@ async function registerCommands() {
       .setDescription("Configura o sistema do bot.")
       .setDefaultMemberPermissions(null),
 
+    // /fila continua sendo a fila normal de apostas.
     new SlashCommandBuilder()
       .setName("fila")
-      .setDescription("Cria e publica as filas de apostas.")
-      .setDefaultMemberPermissions(null)
-      .addSubcommand(subcommand =>
-        subcommand
-          .setName("streamer")
-          .setDescription("Cria uma fila exclusiva para um Influencer/Streamer.")
-      ),
+      .setDescription("Cria e publica as filas normais de apostas.")
+      .setDefaultMemberPermissions(null),
+
+    // O sistema de Streamer fica separado para não alterar o /fila original.
+    new SlashCommandBuilder()
+      .setName("fila-streamer")
+      .setDescription("Cria uma fila exclusiva para um Influencer/Streamer.")
+      .setDefaultMemberPermissions(null),
 
     new SlashCommandBuilder()
       .setName("cadastro")
@@ -1365,11 +1367,8 @@ client.on("interactionCreate", async interaction => {
         return interaction.showModal(modal);
       }
 
-      /* /fila */
-      if (interaction.commandName === "fila") {
-        const subcommand = interaction.options.getSubcommand(false);
-
-        if (subcommand === "streamer") {
+      /* /fila-streamer */
+      if (interaction.commandName === "fila-streamer") {
           if (!(await requireStreamer(interaction))) return;
 
           if (!db.config.streamerRoleId) {
@@ -1410,8 +1409,10 @@ client.on("interactionCreate", async interaction => {
           );
 
           return interaction.showModal(modal);
-        }
+      }
 
+      /* /fila normal */
+      if (interaction.commandName === "fila") {
         filaSetup.set(interaction.user.id, {
           format: null,
           modality: null,
