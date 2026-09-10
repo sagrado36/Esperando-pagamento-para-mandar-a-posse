@@ -1267,9 +1267,7 @@ client.on("interactionCreate", async interaction => {
 
       /* /embeds */
       if (interaction.commandName === "embeds") {
-        if (!isAdmin(interaction)) {
-          return deny(interaction, "❌ Apenas administradores podem usar este comando.");
-        }
+        if (!(await requireAdmin(interaction))) return;
 
         const modal = new ModalBuilder()
           .setCustomId("embed_builder")
@@ -2498,9 +2496,7 @@ client.on("interactionCreate", async interaction => {
       }
 
       if (interaction.customId === "embed_builder") {
-        if (!isAdmin(interaction)) {
-          return deny(interaction, "❌ Apenas administradores podem usar este comando.");
-        }
+        if (!(await requireAdmin(interaction))) return;
 
         const title = interaction.fields.getTextInputValue("embed_title").trim();
         const description = interaction.fields.getTextInputValue("embed_description").trim();
