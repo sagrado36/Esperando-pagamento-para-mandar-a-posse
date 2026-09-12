@@ -17,11 +17,13 @@ COMANDOS:
   /fila
   /cadastro
   /embeds
+  /criar ticket
   /fila streamer
   .ssmob
   .ssemu
   .med
   .p
+  .aux
 
 REGRAS:
   - Embeds organizadas e autoexplicativas.
@@ -56,6 +58,7 @@ const {
   StringSelectMenuBuilder,
   ChannelSelectMenuBuilder,
   RoleSelectMenuBuilder,
+  UserSelectMenuBuilder,
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
@@ -117,7 +120,16 @@ function createDefaultDatabase() {
       mediatorQueueChannelId: null,
       betCategoryId: null,
       streamerCategoryId: null,
-      mediatorQueueMessageId: null
+      mediatorQueueMessageId: null,
+      ticketSupportRoleId: null,
+      ticketSupervisorRoleId: null,
+      ticketAuxiliarRoleId: null,
+      ticketDirectorRoleId: null,
+      ticketSubDonRoleId: null,
+      ticketSupportChannelId: null,
+      ticketRefundChannelId: null,
+      ticketVacanciesChannelId: null,
+      ticketEventChannelId: null
     },
 
     pix: {},
@@ -136,6 +148,7 @@ function createDefaultDatabase() {
 
     streamerQueues: {},
     streamerMatches: {},
+    tickets: {},
 
     createdAt: Date.now()
   };
@@ -299,6 +312,7 @@ function configEmbed() {
     `💰 **Taxa:** ${money(c.fee)} • **Categoria:** ${c.betCategoryId ? `<#${c.betCategoryId}>` : "❌"} • **Streamer:** ${c.streamerCategoryId ? `<#${c.streamerCategoryId}>` : "❌"}`,
     `📢 **Filas:** ${c.ssmobChannelId ? `<#${c.ssmobChannelId}>` : "❌"} • ${c.ssemuChannelId ? `<#${c.ssemuChannelId}>` : "❌"}`,
     `👨‍⚖️ **Mediadores:** ${c.mediatorQueueChannelId ? `<#${c.mediatorQueueChannelId}>` : "❌"}`,
+    `🎫 **Tickets:** Suporte ${c.ticketSupportChannelId ? `<#${c.ticketSupportChannelId}>` : "❌"} • Reembolso ${c.ticketRefundChannelId ? `<#${c.ticketRefundChannelId}>` : "❌"} • Vagas ${c.ticketVacanciesChannelId ? `<#${c.ticketVacanciesChannelId}>` : "❌"} • Evento ${c.ticketEventChannelId ? `<#${c.ticketEventChannelId}>` : "❌"}`,
     `🎨 **Cor:** \`${c.embedColor}\` • **Foto:** ${c.profileImage ? "✅" : "❌"}`
   ].join("\\n"));
 }
@@ -342,6 +356,338 @@ function streamerCheck(interaction) {
     db.config.streamerRoleId &&
     interaction.member?.roles?.cache?.has(db.config.streamerRoleId)
   );
+}
+
+function ticketRoleIds() {
+  return [
+    db.config.ticketSupportRoleId,
+    db.config.ticketSupervisorRoleId,
+    db.config.ticketAuxiliarRoleId,
+    db.config.ticketDirectorRoleId,
+    db.config.ticketSubDonRoleId
+  ].filter(Boolean);
+}
+
+function ticketStaffMemberCheck(member) {
+  if (!member) return false;
+  const ids = ticketRoleIds();
+  return ids.length > 0 && ids.some(id => member.roles?.cache?.has(id));
+}
+
+function getTicketByChannel(channelId) {
+  return Object.values(db.tickets || {}).find(
+    ticket => ticket.channelId === channelId && ticket.status !== "finished"
+  );
+}
+
+function ticketTypeConfig(type) {
+  const map = {
+    support: {
+      label: "Suporte",
+      emoji: "🛠️",
+      channelId: db.config.ticketSupportChannelId
+    },
+    refund: {
+      label: "Reembolso",
+      emoji: "💰",
+      channelId: db.config.ticketRefundChannelId
+    },
+    vacancies: {
+      label: "Vagas",
+      emoji: "📋",
+      channelId: db.config.ticketVacanciesChannelId
+    },
+    event: {
+      label: "Receber Evento",
+      emoji: "🎉",
+      channelId: db.config.ticketEventChannelId
+    }
+  };
+  return map[type] || null;
+}
+
+function ticketPanelEmbed() {
+  return makeEmbed(
+    "🎫 CENTRAL DE ATENDIMENTO",
+    [
+      "**Bem-vindo ao nosso sistema oficial de Tickets.**",
+      "",
+      "Selecione abaixo a opção que melhor corresponde à sua necessidade. Um atendimento privado será criado para que sua solicitação possa ser analisada pela equipe responsável.",
+      "",
+      "📌 **Orientações**",
+      "• Escolha corretamente o tipo de atendimento.",
+      "• Explique sua solicitação com o máximo de detalhes possível.",
+      "• Evite abrir vários tickets para a mesma situação.",
+      "• Aguarde a equipe responsável pelo atendimento.",
+      "",
+      "🔒 **Privacidade**",
+      "O atendimento será privado e ficará disponível apenas para o solicitante e para a equipe responsável.",
+      "",
+      "👇 **Escolha uma opção abaixo para iniciar seu atendimento.**"
+    ].join("\n")
+  );
+}
+
+function ticketPanelComponents() {
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId("ticket_create|support")
+        .setLabel("Suporte")
+        .setEmoji("🛠️")
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId("ticket_create|refund")
+        .setLabel("Reembolso")
+        .setEmoji("💰")
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId("ticket_create|vacancies")
+        .setLabel("Vagas")
+        .setEmoji("📋")
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId("ticket_create|event")
+        .setLabel("Receber Evento")
+        .setEmoji("🎉")
+        .setStyle(ButtonStyle.Primary)
+    )
+  ];
+}
+
+function ticketEmbed(ticket) {
+  const type = ticketTypeConfig(ticket.type);
+  return makeEmbed(
+    `${type?.emoji || "🎫"} TICKET DE ${String(type?.label || "ATENDIMENTO").toUpperCase()}`,
+    [
+      "**Atendimento aberto com sucesso.**",
+      "",
+      `👤 **Solicitante:** <@${ticket.requesterId}>`,
+      `📂 **Assunto:** ${type?.label || "Atendimento"}`,
+      `🛡️ **Responsável:** ${ticket.assignedId ? `<@${ticket.assignedId}>` : "Aguardando responsável"}`,
+      "",
+      "💬 Descreva neste canal o motivo do contato e aguarde o atendimento da equipe.",
+      "",
+      "🔒 **Este atendimento é privado.**",
+      "Quando um responsável assumir o ticket, o acesso será restringido ao solicitante e ao responsável que assumiu.",
+      "",
+      "⚠️ Evite abrir tickets duplicados e não envie informações desnecessárias."
+    ].join("\n")
+  );
+}
+
+function ticketComponents() {
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId("ticket_finish")
+        .setLabel("Finalizar Ticket")
+        .setEmoji("🏁")
+        .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId("ticket_take")
+        .setLabel("Assumir Ticket")
+        .setEmoji("🛠️")
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId("ticket_leave")
+        .setLabel("Sair Ticket")
+        .setEmoji("🚪")
+        .setStyle(ButtonStyle.Secondary)
+    )
+  ];
+}
+
+function auxPanelComponents() {
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId("aux_finish")
+        .setLabel("Finalizar Ticket")
+        .setEmoji("🏁")
+        .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId("aux_add_member")
+        .setLabel("Adicionar membro")
+        .setEmoji("👤")
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId("aux_rename")
+        .setLabel("Mudar nome do canal")
+        .setEmoji("✏️")
+        .setStyle(ButtonStyle.Secondary)
+    )
+  ];
+}
+
+async function createTicket(guild, type, requesterId) {
+  const config = ticketTypeConfig(type);
+  if (!config?.channelId) return { error: "CONFIG" };
+
+  const parent = await guild.channels.fetch(config.channelId).catch(() => null);
+  if (!parent) return { error: "PARENT" };
+
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  const safeName = `ticket-${type}-${id.slice(-6)}`;
+  const ticket = {
+    id,
+    guildId: guild.id,
+    type,
+    requesterId,
+    assignedId: null,
+    channelId: null,
+    status: "open",
+    createdAt: Date.now()
+  };
+
+  const roleIds = ticketRoleIds();
+  let channel;
+
+  if (parent.type === ChannelType.GuildCategory) {
+    const overwrites = [
+      {
+        id: guild.roles.everyone.id,
+        deny: [PermissionFlagsBits.ViewChannel]
+      },
+      {
+        id: requesterId,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory,
+          PermissionFlagsBits.AttachFiles,
+          PermissionFlagsBits.EmbedLinks
+        ]
+      }
+    ];
+
+    for (const roleId of roleIds) {
+      overwrites.push({
+        id: roleId,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory
+        ]
+      });
+    }
+
+    channel = await guild.channels.create({
+      name: safeName,
+      type: ChannelType.GuildText,
+      parent: parent.id,
+      permissionOverwrites: overwrites
+    });
+  } else if (parent.isTextBased() && typeof parent.threads?.create === "function") {
+    // Quando o administrador selecionar um canal de texto, o ticket é criado
+    // como uma thread privada dentro desse canal, mantendo a organização visual.
+    channel = await parent.threads.create({
+      name: safeName,
+      type: ChannelType.PrivateThread,
+      invitable: false,
+      reason: `Ticket ${config.label}`
+    });
+
+    await channel.members.add(requesterId).catch(() => {});
+    for (const roleId of roleIds) {
+      const role = guild.roles.cache.get(roleId);
+      if (!role) continue;
+      for (const member of role.members.values()) {
+        await channel.members.add(member.id).catch(() => {});
+      }
+    }
+  } else {
+    return { error: "TYPE" };
+  }
+
+  ticket.channelId = channel.id;
+  db.tickets[id] = ticket;
+
+  const staffMentions = roleIds.map(roleId => `<@&${roleId}>`).join(" ");
+  const notification = [
+    staffMentions || "👥 Equipe responsável",
+    "",
+    `🎫 **Novo ticket de ${config.label}**`,
+    `👤 **Solicitante:** <@${requesterId}>`,
+    "",
+    "🔔 Todos os responsáveis configurados foram notificados.",
+    "🛠️ Um responsável pode assumir o atendimento pelo botão abaixo."
+  ].join("\n");
+
+  await channel.send({
+    content: notification,
+    embeds: [ticketEmbed(ticket)],
+    components: ticketComponents()
+  });
+
+  saveDatabase();
+  return { ticket, channel };
+}
+
+async function updateTicketAccessAfterTake(guild, ticket, assigneeId) {
+  const channel = await guild.channels.fetch(ticket.channelId).catch(() => null);
+  if (!channel) return false;
+
+  if (channel.type === ChannelType.GuildText) {
+    const roleIds = ticketRoleIds();
+    for (const roleId of roleIds) {
+      await channel.permissionOverwrites.edit(roleId, {
+        ViewChannel: false,
+        SendMessages: false,
+        ReadMessageHistory: false
+      }).catch(() => {});
+    }
+
+    await channel.permissionOverwrites.edit(ticket.requesterId, {
+      ViewChannel: true,
+      SendMessages: true,
+      ReadMessageHistory: true,
+      AttachFiles: true,
+      EmbedLinks: true
+    }).catch(() => {});
+
+    await channel.permissionOverwrites.edit(assigneeId, {
+      ViewChannel: true,
+      SendMessages: true,
+      ReadMessageHistory: true,
+      ManageMessages: true
+    }).catch(() => {});
+    return true;
+  }
+
+  if (channel.isThread?.()) {
+    const roleIds = ticketRoleIds();
+    for (const roleId of roleIds) {
+      const role = guild.roles.cache.get(roleId);
+      if (!role) continue;
+      for (const member of role.members.values()) {
+        if (member.id !== assigneeId && member.id !== ticket.requesterId) {
+          await channel.members.remove(member.id).catch(() => {});
+        }
+      }
+    }
+
+    await channel.members.add(ticket.requesterId).catch(() => {});
+    await channel.members.add(assigneeId).catch(() => {});
+    return true;
+  }
+
+  return false;
+}
+
+async function finishTicket(ticket, channel) {
+  ticket.status = "finished";
+  ticket.closedAt = Date.now();
+  saveDatabase();
+  await channel.send({
+    embeds: [
+      makeEmbed(
+        "🏁 TICKET FINALIZADO",
+        "O atendimento foi encerrado. Este canal será excluído em alguns segundos."
+      )
+    ]
+  }).catch(() => {});
+  setTimeout(() => channel.delete("Ticket finalizado").catch(() => {}), 3000);
 }
 
 async function deny(interaction, text) {
@@ -1025,6 +1371,19 @@ function configButtons() {
         .setLabel("Salvar")
         .setEmoji("💾")
         .setStyle(ButtonStyle.Success)
+    ),
+
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId("config_tickets")
+        .setLabel("Cargos Tickets")
+        .setEmoji("🎫")
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId("config_ticket_channels")
+        .setLabel("Canais Tickets")
+        .setEmoji("📂")
+        .setStyle(ButtonStyle.Primary)
     )
   ];
 }
@@ -1064,7 +1423,17 @@ async function registerCommands() {
     new SlashCommandBuilder()
       .setName("embeds")
       .setDescription("Cria e envia uma embed personalizada no canal atual.")
+      .setDefaultMemberPermissions(null),
+
+    new SlashCommandBuilder()
+      .setName("criar")
+      .setDescription("Cria painéis do sistema.")
       .setDefaultMemberPermissions(null)
+      .addSubcommand(subcommand =>
+        subcommand
+          .setName("ticket")
+          .setDescription("Publica o painel de abertura de Tickets.")
+      )
   ].map(command => command.toJSON());
 
   const rest = new REST({ version: "10" }).setToken(TOKEN);
@@ -1213,6 +1582,36 @@ client.on("messageCreate", async message => {
       return;
     }
 
+    if (command === ".aux") {
+      const ticket = getTicketByChannel(message.channel.id);
+
+      if (!ticket) {
+        return message.reply("❌ Este comando só pode ser usado dentro de um ticket.");
+      }
+
+      if (!ticketStaffMemberCheck(message.member)) {
+        return message.reply("❌ Apenas os responsáveis configurados para Tickets podem usar `.aux`.");
+      }
+
+      return message.reply({
+        embeds: [
+          makeEmbed(
+            "🛠️ PAINEL AUXILIAR",
+            [
+              "**Central de gerenciamento deste ticket.**",
+              "",
+              `🎫 **Ticket:** ${message.channel}`,
+              `👤 **Solicitante:** <@${ticket.requesterId}>`,
+              `🛡️ **Responsável:** ${ticket.assignedId ? `<@${ticket.assignedId}>` : "Aguardando responsável"}`,
+              "",
+              "Escolha uma das opções abaixo para administrar o atendimento."
+            ].join("\n")
+          )
+        ],
+        components: auxPanelComponents()
+      });
+    }
+
     if (command === ".med") {
       const bet = Object.values(db.bets).find(
         item =>
@@ -1304,6 +1703,18 @@ client.on("interactionCreate", async interaction => {
           embeds: [configEmbed()],
           components: configButtons(),
           flags: MessageFlags.Ephemeral
+        });
+      }
+
+      if (
+        interaction.commandName === "criar" &&
+        interaction.options.getSubcommand() === "ticket"
+      ) {
+        if (!(await requireAdmin(interaction))) return;
+
+        return interaction.reply({
+          embeds: [ticketPanelEmbed()],
+          components: ticketPanelComponents()
         });
       }
 
@@ -1506,6 +1917,193 @@ client.on("interactionCreate", async interaction => {
     if (interaction.isButton()) {
       const [action, ...parts] = interaction.customId.split("|");
 
+      /* TICKETS */
+      if (action === "ticket_create") {
+        const type = parts[0];
+        const config = ticketTypeConfig(type);
+
+        if (!config) return deny(interaction, "❌ Tipo de ticket inválido.");
+        if (!config.channelId) {
+          return deny(interaction, "❌ Este tipo de ticket ainda não foi configurado no `/config`.");
+        }
+
+        const existing = Object.values(db.tickets || {}).find(
+          ticket =>
+            ticket.guildId === interaction.guild.id &&
+            ticket.requesterId === interaction.user.id &&
+            ticket.status !== "finished"
+        );
+
+        if (existing) {
+          return deny(
+            interaction,
+            `❌ Você já possui um ticket aberto: <#${existing.channelId}>`
+          );
+        }
+
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+        const result = await createTicket(
+          interaction.guild,
+          type,
+          interaction.user.id
+        );
+
+        if (result.error) {
+          return interaction.editReply({
+            content:
+              result.error === "CONFIG"
+                ? "❌ Configure o canal/categoria deste tipo de ticket no `/config`."
+                : "❌ Não foi possível criar o ticket. Verifique as permissões do bot."
+          });
+        }
+
+        return interaction.editReply({
+          content: `✅ Seu ticket foi criado com sucesso: <#${result.channel.id}>`
+        });
+      }
+
+      if (
+        action === "ticket_finish" ||
+        action === "aux_finish"
+      ) {
+        const ticket = getTicketByChannel(interaction.channel.id);
+        if (!ticket) return deny(interaction, "❌ Este canal não é um ticket ativo.");
+
+        if (
+          action === "aux_finish" &&
+          !ticketStaffMemberCheck(interaction.member)
+        ) {
+          return deny(interaction, "❌ Apenas os responsáveis configurados podem usar esta função.");
+        }
+
+        if (action === "ticket_finish") {
+          const allowed =
+            interaction.user.id === ticket.requesterId ||
+            ticketStaffMemberCheck(interaction.member);
+
+          if (!allowed) {
+            return deny(interaction, "❌ Você não tem permissão para finalizar este ticket.");
+          }
+        }
+
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        await finishTicket(ticket, interaction.channel);
+        return interaction.editReply({ content: "✅ Ticket finalizado." });
+      }
+
+      if (action === "ticket_take") {
+        const ticket = getTicketByChannel(interaction.channel.id);
+        if (!ticket) return deny(interaction, "❌ Este canal não é um ticket ativo.");
+
+        if (!ticketStaffMemberCheck(interaction.member)) {
+          return deny(interaction, "❌ Apenas os responsáveis configurados podem assumir tickets.");
+        }
+
+        if (ticket.assignedId) {
+          return deny(interaction, `❌ Este ticket já foi assumido por <@${ticket.assignedId}>.`);
+        }
+
+        ticket.assignedId = interaction.user.id;
+        ticket.status = "assigned";
+
+        const updated = await updateTicketAccessAfterTake(
+          interaction.guild,
+          ticket,
+          interaction.user.id
+        );
+
+        if (!updated) {
+          ticket.assignedId = null;
+          ticket.status = "open";
+          saveDatabase();
+          return deny(interaction, "❌ Não foi possível atualizar a privacidade deste ticket.");
+        }
+
+        saveDatabase();
+
+        return interaction.update({
+          embeds: [ticketEmbed(ticket)],
+          components: ticketComponents()
+        });
+      }
+
+      if (action === "ticket_leave") {
+        const ticket = getTicketByChannel(interaction.channel.id);
+        if (!ticket) return deny(interaction, "❌ Este canal não é um ticket ativo.");
+
+        if (interaction.user.id !== ticket.requesterId) {
+          return deny(interaction, "❌ Somente quem abriu o ticket pode usar esta opção.");
+        }
+
+        if (ticket.assignedId) {
+          return deny(interaction, "❌ O ticket já foi assumido e não pode ser abandonado desta forma.");
+        }
+
+        if (interaction.channel.type === ChannelType.GuildText) {
+          await interaction.channel.permissionOverwrites.edit(interaction.user.id, {
+            ViewChannel: false,
+            SendMessages: false,
+            ReadMessageHistory: false
+          }).catch(() => {});
+        } else if (interaction.channel.isThread?.()) {
+          await interaction.channel.members.remove(interaction.user.id).catch(() => {});
+        }
+
+        ticket.requesterLeft = true;
+        saveDatabase();
+        return interaction.reply({
+          content: "✅ Você saiu do ticket.",
+          flags: MessageFlags.Ephemeral
+        });
+      }
+
+      if (
+        action === "aux_add_member" ||
+        action === "aux_rename"
+      ) {
+        const ticket = getTicketByChannel(interaction.channel.id);
+        if (!ticket) return deny(interaction, "❌ Este canal não é um ticket ativo.");
+
+        if (!ticketStaffMemberCheck(interaction.member)) {
+          return deny(interaction, "❌ Apenas os responsáveis configurados podem usar esta função.");
+        }
+
+        if (action === "aux_add_member") {
+          return interaction.reply({
+            content: "👤 **Selecione o usuário que receberá acesso ao ticket:**",
+            components: [
+              new ActionRowBuilder().addComponents(
+                new UserSelectMenuBuilder()
+                  .setCustomId(`aux_member_select|${ticket.id}`)
+                  .setPlaceholder("Selecionar membro")
+                  .setMinValues(1)
+                  .setMaxValues(1)
+              )
+            ],
+            flags: MessageFlags.Ephemeral
+          });
+        }
+
+        const modal = new ModalBuilder()
+          .setCustomId(`ticket_rename|${ticket.id}`)
+          .setTitle("Mudar nome do canal");
+
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("ticket_name")
+              .setLabel("Novo nome do canal")
+              .setPlaceholder("Ex.: atendimento-joao")
+              .setStyle(TextInputStyle.Short)
+              .setRequired(true)
+              .setMaxLength(100)
+          )
+        );
+
+        return interaction.showModal(modal);
+      }
+
       /* CONFIG */
       if (action === "config_roles") {
         if (!(await requireAdmin(interaction))) return;
@@ -1650,6 +2248,41 @@ client.on("interactionCreate", async interaction => {
         });
       }
 
+      if (action === "config_ticket_channels") {
+        if (!(await requireAdmin(interaction))) return;
+
+        return interaction.reply({
+          content: "🎫 **CANAIS / CATEGORIAS DOS TICKETS**\n\nSelecione o canal de texto ou categoria correspondente a cada tipo. Se for selecionado um canal de texto, o ticket será criado como thread privada nele; se for uma categoria, será criado como canal privado dentro dela.",
+          components: [
+            new ActionRowBuilder().addComponents(
+              new ChannelSelectMenuBuilder()
+                .setCustomId("ticket_channel_support")
+                .setPlaceholder("🛠️ Canal/Categoria de Suporte")
+                .setChannelTypes(ChannelType.GuildText, ChannelType.GuildCategory)
+            ),
+            new ActionRowBuilder().addComponents(
+              new ChannelSelectMenuBuilder()
+                .setCustomId("ticket_channel_refund")
+                .setPlaceholder("💰 Canal/Categoria de Reembolso")
+                .setChannelTypes(ChannelType.GuildText, ChannelType.GuildCategory)
+            ),
+            new ActionRowBuilder().addComponents(
+              new ChannelSelectMenuBuilder()
+                .setCustomId("ticket_channel_vacancies")
+                .setPlaceholder("📋 Canal/Categoria de Vagas")
+                .setChannelTypes(ChannelType.GuildText, ChannelType.GuildCategory)
+            ),
+            new ActionRowBuilder().addComponents(
+              new ChannelSelectMenuBuilder()
+                .setCustomId("ticket_channel_event")
+                .setPlaceholder("🎉 Canal/Categoria de Receber Evento")
+                .setChannelTypes(ChannelType.GuildText, ChannelType.GuildCategory)
+            )
+          ],
+          flags: MessageFlags.Ephemeral
+        });
+      }
+
       if (action === "config_category") {
         if (!(await requireAdmin(interaction))) return;
 
@@ -1698,6 +2331,42 @@ client.on("interactionCreate", async interaction => {
 
         return interaction.reply({
           content: "✅ Fila de Mediadores publicada/atualizada.",
+          flags: MessageFlags.Ephemeral
+        });
+      }
+
+      if (action === "config_tickets") {
+        if (!(await requireAdmin(interaction))) return;
+
+        return interaction.reply({
+          content: "🎫 **CONFIGURAÇÃO DE TICKETS**\n\nConfigure os 5 cargos responsáveis e os 4 canais/categorias onde os tickets serão organizados.",
+          components: [
+            new ActionRowBuilder().addComponents(
+              new RoleSelectMenuBuilder()
+                .setCustomId("ticket_role_support")
+                .setPlaceholder("🛠️ Cargo Suporte")
+            ),
+            new ActionRowBuilder().addComponents(
+              new RoleSelectMenuBuilder()
+                .setCustomId("ticket_role_supervisor")
+                .setPlaceholder("🛡️ Cargo Supervisor")
+            ),
+            new ActionRowBuilder().addComponents(
+              new RoleSelectMenuBuilder()
+                .setCustomId("ticket_role_auxiliar")
+                .setPlaceholder("🔧 Cargo Auxiliar")
+            ),
+            new ActionRowBuilder().addComponents(
+              new RoleSelectMenuBuilder()
+                .setCustomId("ticket_role_director")
+                .setPlaceholder("👑 Cargo Diretor")
+            ),
+            new ActionRowBuilder().addComponents(
+              new RoleSelectMenuBuilder()
+                .setCustomId("ticket_role_subdon")
+                .setPlaceholder("👑 Cargo Sub Don")
+            )
+          ],
           flags: MessageFlags.Ephemeral
         });
       }
@@ -2344,6 +3013,21 @@ client.on("interactionCreate", async interaction => {
       if (interaction.customId === "set_streamer_role") {
         db.config.streamerRoleId = roleId;
       }
+      if (interaction.customId === "ticket_role_support") {
+        db.config.ticketSupportRoleId = roleId;
+      }
+      if (interaction.customId === "ticket_role_supervisor") {
+        db.config.ticketSupervisorRoleId = roleId;
+      }
+      if (interaction.customId === "ticket_role_auxiliar") {
+        db.config.ticketAuxiliarRoleId = roleId;
+      }
+      if (interaction.customId === "ticket_role_director") {
+        db.config.ticketDirectorRoleId = roleId;
+      }
+      if (interaction.customId === "ticket_role_subdon") {
+        db.config.ticketSubDonRoleId = roleId;
+      }
 
       saveDatabase();
 
@@ -2469,6 +3153,18 @@ client.on("interactionCreate", async interaction => {
       if (interaction.customId === "streamer_category") {
         db.config.streamerCategoryId = channelId;
       }
+      if (interaction.customId === "ticket_channel_support") {
+        db.config.ticketSupportChannelId = channelId;
+      }
+      if (interaction.customId === "ticket_channel_refund") {
+        db.config.ticketRefundChannelId = channelId;
+      }
+      if (interaction.customId === "ticket_channel_vacancies") {
+        db.config.ticketVacanciesChannelId = channelId;
+      }
+      if (interaction.customId === "ticket_channel_event") {
+        db.config.ticketEventChannelId = channelId;
+      }
 
       saveDatabase();
       return interaction.update({
@@ -2476,6 +3172,44 @@ client.on("interactionCreate", async interaction => {
         components: []
       });
     }
+    /* ----------------------------------------------------
+       SELECT DE USUÁRIO — TICKETS
+    ---------------------------------------------------- */
+    if (interaction.isUserSelectMenu()) {
+      if (interaction.customId.startsWith("aux_member_select|")) {
+        const ticketId = interaction.customId.split("|")[1];
+        const ticket = db.tickets?.[ticketId];
+
+        if (!ticket || ticket.status === "finished") {
+          return deny(interaction, "❌ Ticket não encontrado ou já finalizado.");
+        }
+
+        if (!ticketStaffMemberCheck(interaction.member)) {
+          return deny(interaction, "❌ Apenas os responsáveis configurados podem adicionar membros.");
+        }
+
+        const userId = interaction.values[0];
+        const channel = interaction.channel;
+
+        if (channel.type === ChannelType.GuildText) {
+          await channel.permissionOverwrites.edit(userId, {
+            ViewChannel: true,
+            SendMessages: true,
+            ReadMessageHistory: true
+          }).catch(() => {});
+        } else if (channel.isThread?.()) {
+          await channel.members.add(userId).catch(() => {});
+        } else {
+          return deny(interaction, "❌ Este canal não permite adicionar membros dessa forma.");
+        }
+
+        return interaction.update({
+          content: `✅ <@${userId}> recebeu acesso a este ticket.`,
+          components: []
+        });
+      }
+    }
+
     /* ----------------------------------------------------
        MODAIS
     ---------------------------------------------------- */
@@ -2759,6 +3493,43 @@ client.on("interactionCreate", async interaction => {
                 .setStyle(ButtonStyle.Secondary)
             )
           ]
+        });
+      }
+
+      if (interaction.customId.startsWith("ticket_rename|")) {
+        const ticketId = interaction.customId.split("|")[1];
+        const ticket = db.tickets?.[ticketId];
+
+        if (!ticket || ticket.status === "finished") {
+          return deny(interaction, "❌ Ticket não encontrado ou já finalizado.");
+        }
+
+        if (!ticketStaffMemberCheck(interaction.member)) {
+          return deny(interaction, "❌ Apenas os responsáveis configurados podem mudar o nome do ticket.");
+        }
+
+        const newName = interaction.fields
+          .getTextInputValue("ticket_name")
+          .trim()
+          .toLowerCase()
+          .replace(/[^a-z0-9-_]/g, "-")
+          .replace(/-+/g, "-")
+          .replace(/^-|-$/g, "")
+          .slice(0, 90);
+
+        if (!newName) {
+          return deny(interaction, "❌ Informe um nome válido para o canal.");
+        }
+
+        await interaction.channel.setName(newName).catch(error => {
+          console.error("❌ Não foi possível renomear o ticket:", error);
+          return null;
+        });
+
+        saveDatabase();
+        return interaction.reply({
+          content: `✅ Nome do ticket alterado para **${newName}**.`,
+          flags: MessageFlags.Ephemeral
         });
       }
 
