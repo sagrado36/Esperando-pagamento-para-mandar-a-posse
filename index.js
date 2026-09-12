@@ -42,7 +42,7 @@ REGRAS:
 */
 
 const {
-  Client,
+  MessageFlags, Client,
   GatewayIntentBits,
   Partials,
   REST,
@@ -346,9 +346,9 @@ function streamerCheck(interaction) {
 
 async function deny(interaction, text) {
   if (interaction.replied || interaction.deferred) {
-    return interaction.followUp({ content: text, ephemeral: true }).catch(() => {});
+    return interaction.followUp({ content: text, flags: MessageFlags.Ephemeral }).catch(() => {});
   }
-  return interaction.reply({ content: text, ephemeral: true }).catch(() => {});
+  return interaction.reply({ content: text, flags: MessageFlags.Ephemeral }).catch(() => {});
 }
 
 async function requireAdmin(interaction) {
@@ -1097,7 +1097,7 @@ const client = new Client({
    READY
 ======================================================== */
 
-client.once("ready", async () => {
+client.once('clientReady', async () => {
   console.log(`✅ Bot online: ${client.user.tag}`);
 
   try {
@@ -1303,7 +1303,7 @@ client.on("interactionCreate", async interaction => {
         return interaction.reply({
           embeds: [configEmbed()],
           components: configButtons(),
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
@@ -1490,7 +1490,7 @@ client.on("interactionCreate", async interaction => {
                 .setChannelTypes(ChannelType.GuildText)
             )
           ],
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
@@ -1530,7 +1530,7 @@ client.on("interactionCreate", async interaction => {
                 .setPlaceholder("Selecionar cargo Influencer / Streamer")
             )
           ],
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
@@ -1567,7 +1567,7 @@ client.on("interactionCreate", async interaction => {
                 .setStyle(ButtonStyle.Danger)
             )
           ],
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
@@ -1646,7 +1646,7 @@ client.on("interactionCreate", async interaction => {
                 .setChannelTypes(ChannelType.GuildText)
             )
           ],
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
@@ -1663,7 +1663,7 @@ client.on("interactionCreate", async interaction => {
                 .setChannelTypes(ChannelType.GuildCategory)
             )
           ],
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
@@ -1680,7 +1680,7 @@ client.on("interactionCreate", async interaction => {
                 .setChannelTypes(ChannelType.GuildCategory)
             )
           ],
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
@@ -1698,7 +1698,7 @@ client.on("interactionCreate", async interaction => {
 
         return interaction.reply({
           content: "✅ Fila de Mediadores publicada/atualizada.",
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
@@ -1707,7 +1707,7 @@ client.on("interactionCreate", async interaction => {
 
         return interaction.reply({
           embeds: [configEmbed()],
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
@@ -1718,7 +1718,7 @@ client.on("interactionCreate", async interaction => {
 
         return interaction.reply({
           content: "✅ Configuração salva.",
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
@@ -1774,7 +1774,7 @@ client.on("interactionCreate", async interaction => {
 
       /* FILA DE STREAMER */
       if (action === "streamer_join") {
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const queue = db.streamerQueues?.[parts[0]];
 
         if (!queue) return deny(interaction, "❌ Esta fila de Streamer não existe mais.");
@@ -1820,13 +1820,13 @@ client.on("interactionCreate", async interaction => {
 
         return interaction.reply({
           content: "✅ Você saiu da fila de Streamer.",
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
       /* FILA */
       if (action === "queue_join") {
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const queue = db.queues[parts[0]];
         const selectedMode = parts[1] || null;
 
@@ -1893,7 +1893,7 @@ client.on("interactionCreate", async interaction => {
           return interaction.editReply({
             content:
               `🎮 Aposta criada em ${bet.channelId ? `<#${bet.channelId}>` : "canal privado"}.`,
-            ephemeral: true
+            flags: MessageFlags.Ephemeral
           });
         }
 
@@ -1929,7 +1929,7 @@ client.on("interactionCreate", async interaction => {
             queue.players.length < oldLength
               ? "✅ Você saiu da fila."
               : "❌ Você não estava nessa fila.",
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
@@ -1946,7 +1946,7 @@ client.on("interactionCreate", async interaction => {
 
         return interaction.reply({
           content: "✅ Você entrou na fila de Mediadores.",
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
@@ -1968,7 +1968,7 @@ client.on("interactionCreate", async interaction => {
 
         return interaction.reply({
           content: "✅ Você saiu da fila de Mediadores.",
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
@@ -2069,7 +2069,7 @@ client.on("interactionCreate", async interaction => {
           return deny(interaction, "❌ Esta aposta não está mais aguardando confirmações.");
         }
 
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         if (!bet.confirmedBy.includes(interaction.user.id)) {
           bet.confirmedBy.push(interaction.user.id);
         }
@@ -2186,7 +2186,7 @@ client.on("interactionCreate", async interaction => {
           components: [new ActionRowBuilder().addComponents(
             new StringSelectMenuBuilder().setCustomId(`result_normal|${bet.id}`).setPlaceholder("Escolher vencedor")
               .addOptions(await playerSelectOptions(interaction.guild, bet.players, "🏆"))
-          )], ephemeral: true
+          )], flags: MessageFlags.Ephemeral
         });
       }
 
@@ -2212,7 +2212,7 @@ client.on("interactionCreate", async interaction => {
           components: [new ActionRowBuilder().addComponents(
             new StringSelectMenuBuilder().setCustomId(`result_wo|${bet.id}`).setPlaceholder("Escolher vencedor por W.O.")
               .addOptions(await playerSelectOptions(interaction.guild, bet.players, "🚫"))
-          )], ephemeral: true
+          )], flags: MessageFlags.Ephemeral
         });
       }
 
@@ -2317,7 +2317,7 @@ client.on("interactionCreate", async interaction => {
 
         return interaction.reply({
           content: `\`${value}\``,
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
@@ -2534,7 +2534,7 @@ client.on("interactionCreate", async interaction => {
 
         return interaction.reply({
           content: `✅ Sua fila de Streamer foi criada neste canal: ${sent.url}`,
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
@@ -2567,7 +2567,7 @@ client.on("interactionCreate", async interaction => {
         await interaction.channel.send({ embeds: [embed] });
         return interaction.reply({
           content: "✅ **Embed enviada com sucesso!**",
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
@@ -2621,7 +2621,7 @@ client.on("interactionCreate", async interaction => {
 
         return interaction.reply({
           embeds: [e],
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
@@ -2646,7 +2646,7 @@ client.on("interactionCreate", async interaction => {
 
         return interaction.reply({
           content: `✅ Taxa configurada: ${money(fee)}.`,
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
@@ -2681,13 +2681,13 @@ client.on("interactionCreate", async interaction => {
 
         return interaction.reply({
           content: "✅ Aparência atualizada.",
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
       /* SALA FREE FIRE */
       if (interaction.customId.startsWith("room_modal|")) {
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         if (!(await requireMediator(interaction))) return;
 
         const betId = interaction.customId.split("|")[1];
@@ -2791,7 +2791,7 @@ client.on("interactionCreate", async interaction => {
 
         return interaction.reply({
           content: `✅ <@${userId}> foi cadastrado como ADM.`,
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
@@ -2816,7 +2816,7 @@ client.on("interactionCreate", async interaction => {
 
         return interaction.reply({
           content: `✅ <@${userId}> foi removido dos ADMs.`,
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
@@ -3023,7 +3023,7 @@ client.on("interactionCreate", async interaction => {
                 choice === "winner" ? "🏆" : "🚫"
               ))
           )],
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
       if (choice === "room") {
@@ -3107,7 +3107,7 @@ client.on("interactionCreate", async interaction => {
       await interaction.reply({
         content:
           "❌ Ocorreu um erro ao processar esta interação.",
-        ephemeral: true
+        flags: MessageFlags.Ephemeral
       }).catch(() => {});
     }
   }
