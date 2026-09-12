@@ -1043,12 +1043,12 @@ async function registerCommands() {
     new SlashCommandBuilder()
       .setName("fila")
       .setDescription("Cria e publica as filas de apostas.")
-      .setDefaultMemberPermissions(null)
-      .addSubcommand(subcommand =>
-        subcommand
-          .setName("streamer")
-          .setDescription("Cria uma fila exclusiva para um Influencer/Streamer.")
-      ),
+      .setDefaultMemberPermissions(null),
+
+    new SlashCommandBuilder()
+      .setName("fila-streamer")
+      .setDescription("Cria uma fila exclusiva para um Influencer/Streamer.")
+      .setDefaultMemberPermissions(null),
 
     new SlashCommandBuilder()
       .setName("cadastro")
@@ -1407,11 +1407,12 @@ client.on("interactionCreate", async interaction => {
         return interaction.showModal(modal);
       }
 
-      /* /fila */
-      if (interaction.commandName === "fila") {
-        const subcommand = interaction.options.getSubcommand(false);
-
-        if (subcommand === "streamer") {
+      /* /fila e /fila-streamer */
+      if (
+        interaction.commandName === "fila" ||
+        interaction.commandName === "fila-streamer"
+      ) {
+        if (interaction.commandName === "fila-streamer") {
           if (!(await requireStreamer(interaction))) return;
 
           if (!db.config.streamerRoleId) {
