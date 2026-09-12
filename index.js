@@ -410,20 +410,12 @@ function ticketPanelEmbed() {
   return makeEmbed(
     "🎫 CENTRAL DE ATENDIMENTO",
     [
-      "**Bem-vindo ao nosso sistema oficial de Tickets.**",
+      "Escolha abaixo o tipo de atendimento que você precisa.",
       "",
-      "Selecione abaixo a opção que melhor corresponde à sua necessidade. Um atendimento privado será criado para que sua solicitação possa ser analisada pela equipe responsável.",
+      "🛠️ Suporte • 💰 Reembolso • 📋 Vagas • 🎉 Receber Evento",
+      "🔒 O atendimento será privado e a equipe responsável será notificada.",
       "",
-      "📌 **Orientações**",
-      "• Escolha corretamente o tipo de atendimento.",
-      "• Explique sua solicitação com o máximo de detalhes possível.",
-      "• Evite abrir vários tickets para a mesma situação.",
-      "• Aguarde a equipe responsável pelo atendimento.",
-      "",
-      "🔒 **Privacidade**",
-      "O atendimento será privado e ficará disponível apenas para o solicitante e para a equipe responsável.",
-      "",
-      "👇 **Escolha uma opção abaixo para iniciar seu atendimento.**"
+      "👇 Selecione uma opção no menu abaixo."
     ].join("\n")
   );
 }
@@ -431,26 +423,15 @@ function ticketPanelEmbed() {
 function ticketPanelComponents() {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId("ticket_create|support")
-        .setLabel("Suporte")
-        .setEmoji("🛠️")
-        .setStyle(ButtonStyle.Primary),
-      new ButtonBuilder()
-        .setCustomId("ticket_create|refund")
-        .setLabel("Reembolso")
-        .setEmoji("💰")
-        .setStyle(ButtonStyle.Success),
-      new ButtonBuilder()
-        .setCustomId("ticket_create|vacancies")
-        .setLabel("Vagas")
-        .setEmoji("📋")
-        .setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder()
-        .setCustomId("ticket_create|event")
-        .setLabel("Receber Evento")
-        .setEmoji("🎉")
-        .setStyle(ButtonStyle.Primary)
+      new StringSelectMenuBuilder()
+        .setCustomId("ticket_menu")
+        .setPlaceholder("🎫 Escolha o tipo de atendimento")
+        .addOptions([
+          { label: "Suporte", value: "support", emoji: "🛠️", description: "Ajuda e atendimento geral" },
+          { label: "Reembolso", value: "refund", emoji: "💰", description: "Solicitações de reembolso" },
+          { label: "Vagas", value: "vacancies", emoji: "📋", description: "Informações sobre vagas" },
+          { label: "Receber Evento", value: "event", emoji: "🎉", description: "Solicitar recebimento de evento" }
+        ])
     )
   ];
 }
@@ -458,20 +439,14 @@ function ticketPanelComponents() {
 function ticketEmbed(ticket) {
   const type = ticketTypeConfig(ticket.type);
   return makeEmbed(
-    `${type?.emoji || "🎫"} TICKET DE ${String(type?.label || "ATENDIMENTO").toUpperCase()}`,
+    `${type?.emoji || "🎫"} ${type?.label || "ATENDIMENTO"}`,
     [
-      "**Atendimento aberto com sucesso.**",
-      "",
       `👤 **Solicitante:** <@${ticket.requesterId}>`,
-      `📂 **Assunto:** ${type?.label || "Atendimento"}`,
-      `🛡️ **Responsável:** ${ticket.assignedId ? `<@${ticket.assignedId}>` : "Aguardando responsável"}`,
+      `🛡️ **Responsável:** ${ticket.assignedId ? `<@${ticket.assignedId}>` : "Aguardando"}`,
       "",
-      "💬 Descreva neste canal o motivo do contato e aguarde o atendimento da equipe.",
-      "",
-      "🔒 **Este atendimento é privado.**",
-      "Quando um responsável assumir o ticket, o acesso será restringido ao solicitante e ao responsável que assumiu.",
-      "",
-      "⚠️ Evite abrir tickets duplicados e não envie informações desnecessárias."
+      "💬 Explique sua solicitação neste canal.",
+      "🔒 Atendimento privado.",
+      "📌 Ao ser assumido, o acesso ficará somente com o solicitante e o responsável."
     ].join("\n")
   );
 }
@@ -479,21 +454,14 @@ function ticketEmbed(ticket) {
 function ticketComponents() {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId("ticket_finish")
-        .setLabel("Finalizar Ticket")
-        .setEmoji("🏁")
-        .setStyle(ButtonStyle.Danger),
-      new ButtonBuilder()
-        .setCustomId("ticket_take")
-        .setLabel("Assumir Ticket")
-        .setEmoji("🛠️")
-        .setStyle(ButtonStyle.Success),
-      new ButtonBuilder()
-        .setCustomId("ticket_leave")
-        .setLabel("Sair Ticket")
-        .setEmoji("🚪")
-        .setStyle(ButtonStyle.Secondary)
+      new StringSelectMenuBuilder()
+        .setCustomId("ticket_actions")
+        .setPlaceholder("🎫 Painel do Ticket")
+        .addOptions([
+          { label: "Finalizar Ticket", value: "finish", emoji: "🏁", description: "Encerrar este atendimento" },
+          { label: "Assumir Ticket", value: "take", emoji: "🛠️", description: "Assumir este atendimento" },
+          { label: "Sair Ticket", value: "leave", emoji: "🚪", description: "Sair deste atendimento" }
+        ])
     )
   ];
 }
@@ -501,21 +469,14 @@ function ticketComponents() {
 function auxPanelComponents() {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId("aux_finish")
-        .setLabel("Finalizar Ticket")
-        .setEmoji("🏁")
-        .setStyle(ButtonStyle.Danger),
-      new ButtonBuilder()
-        .setCustomId("aux_add_member")
-        .setLabel("Adicionar membro")
-        .setEmoji("👤")
-        .setStyle(ButtonStyle.Primary),
-      new ButtonBuilder()
-        .setCustomId("aux_rename")
-        .setLabel("Mudar nome do canal")
-        .setEmoji("✏️")
-        .setStyle(ButtonStyle.Secondary)
+      new StringSelectMenuBuilder()
+        .setCustomId("aux_menu")
+        .setPlaceholder("🛠️ Painel Auxiliar")
+        .addOptions([
+          { label: "Finalizar Ticket", value: "finish", emoji: "🏁", description: "Encerrar o atendimento" },
+          { label: "Adicionar membro", value: "add_member", emoji: "👤", description: "Dar acesso a um membro" },
+          { label: "Mudar nome do canal", value: "rename", emoji: "✏️", description: "Alterar o nome do ticket" }
+        ])
     )
   ];
 }
@@ -1598,13 +1559,11 @@ client.on("messageCreate", async message => {
           makeEmbed(
             "🛠️ PAINEL AUXILIAR",
             [
-              "**Central de gerenciamento deste ticket.**",
-              "",
               `🎫 **Ticket:** ${message.channel}`,
               `👤 **Solicitante:** <@${ticket.requesterId}>`,
-              `🛡️ **Responsável:** ${ticket.assignedId ? `<@${ticket.assignedId}>` : "Aguardando responsável"}`,
+              `🛡️ **Responsável:** ${ticket.assignedId ? `<@${ticket.assignedId}>` : "Aguardando"}`,
               "",
-              "Escolha uma das opções abaixo para administrar o atendimento."
+              "👇 Selecione uma ação no menu."
             ].join("\n")
           )
         ],
@@ -1646,15 +1605,10 @@ client.on("messageCreate", async message => {
           makeEmbed(
             "👨‍⚖️ PAINEL DO MEDIADOR",
             [
-              "**Central de controle desta aposta.**",
+              `🎮 **${bet.format}** • ${modalityName(bet.modality)}`,
+              `💰 **Valor:** ${money(bet.value)} • **Prêmio:** ${money(bet.value * 2)}`,
               "",
-              `🎮 **Formato:** ${bet.format}`,
-              `📱 **Modalidade:** ${modalityName(bet.modality)}`,
-              `💰 **Valor:** ${money(bet.value)}`,
-              `🏆 **Prêmio:** ${money(bet.value * 2)}`,
-              "",
-              "🛠️ **Ações disponíveis**",
-              "Escolha uma opção no menu abaixo para administrar a partida."
+              "👇 Selecione uma ação no menu."
             ].join("\n")
           )
         ],
@@ -1908,6 +1862,154 @@ client.on("interactionCreate", async interaction => {
 
 
 
+    }
+
+    /* ----------------------------------------------------
+       MENUS DE TICKETS / .AUX
+    ---------------------------------------------------- */
+
+    if (interaction.isStringSelectMenu()) {
+      const menu = interaction.customId;
+      const value = interaction.values[0];
+
+      if (menu === "ticket_menu") {
+        const type = value;
+        const config = ticketTypeConfig(type);
+
+        if (!config) return deny(interaction, "❌ Tipo de ticket inválido.");
+        if (!config.channelId) {
+          return deny(interaction, "❌ Este tipo de ticket ainda não foi configurado no `/config`.");
+        }
+
+        const existing = Object.values(db.tickets || {}).find(
+          ticket =>
+            ticket.guildId === interaction.guild.id &&
+            ticket.requesterId === interaction.user.id &&
+            ticket.status !== "finished"
+        );
+
+        if (existing) {
+          return deny(interaction, `❌ Você já possui um ticket aberto: <#${existing.channelId}>`);
+        }
+
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        const result = await createTicket(interaction.guild, type, interaction.user.id);
+
+        if (result.error) {
+          return interaction.editReply({
+            content:
+              result.error === "CONFIG"
+                ? "❌ Configure o canal deste tipo de ticket no `/config`."
+                : "❌ Não foi possível criar o ticket. Verifique as permissões do bot."
+          });
+        }
+
+        return interaction.editReply({
+          content: `✅ Ticket criado: <#${result.channel.id}>`
+        });
+      }
+
+      if (menu === "ticket_actions" || menu === "aux_menu") {
+        const ticket = getTicketByChannel(interaction.channel.id);
+        if (!ticket) return deny(interaction, "❌ Este canal não é um ticket ativo.");
+
+        if (menu === "aux_menu" && !ticketStaffMemberCheck(interaction.member)) {
+          return deny(interaction, "❌ Apenas os responsáveis configurados podem usar o `.aux`.");
+        }
+
+        if (value === "finish") {
+          const allowed =
+            menu === "aux_menu"
+              ? ticketStaffMemberCheck(interaction.member)
+              : interaction.user.id === ticket.requesterId || ticketStaffMemberCheck(interaction.member);
+
+          if (!allowed) return deny(interaction, "❌ Você não tem permissão para finalizar este ticket.");
+
+          await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+          await finishTicket(ticket, interaction.channel);
+          return interaction.editReply({ content: "✅ Ticket finalizado." });
+        }
+
+        if (menu === "ticket_actions" && value === "take") {
+          if (!ticketStaffMemberCheck(interaction.member)) {
+            return deny(interaction, "❌ Apenas os responsáveis configurados podem assumir tickets.");
+          }
+          if (ticket.assignedId) {
+            return deny(interaction, `❌ Este ticket já foi assumido por <@${ticket.assignedId}>.`);
+          }
+
+          ticket.assignedId = interaction.user.id;
+          ticket.status = "assigned";
+          const updated = await updateTicketAccessAfterTake(interaction.guild, ticket, interaction.user.id);
+
+          if (!updated) {
+            ticket.assignedId = null;
+            ticket.status = "open";
+            saveDatabase();
+            return deny(interaction, "❌ Não foi possível atualizar a privacidade deste ticket.");
+          }
+
+          saveDatabase();
+          return interaction.update({ embeds: [ticketEmbed(ticket)], components: ticketComponents() });
+        }
+
+        if (menu === "ticket_actions" && value === "leave") {
+          if (interaction.user.id !== ticket.requesterId) {
+            return deny(interaction, "❌ Somente quem abriu o ticket pode usar esta opção.");
+          }
+          if (ticket.assignedId) {
+            return deny(interaction, "❌ O ticket já foi assumido e não pode ser abandonado desta forma.");
+          }
+
+          if (interaction.channel.type === ChannelType.GuildText) {
+            await interaction.channel.permissionOverwrites.edit(interaction.user.id, {
+              ViewChannel: false, SendMessages: false, ReadMessageHistory: false
+            }).catch(() => {});
+          } else if (interaction.channel.isThread?.()) {
+            await interaction.channel.members.remove(interaction.user.id).catch(() => {});
+          }
+
+          ticket.requesterLeft = true;
+          saveDatabase();
+          return interaction.reply({ content: "✅ Você saiu do ticket.", flags: MessageFlags.Ephemeral });
+        }
+
+        if (menu === "aux_menu" && value === "add_member") {
+          return interaction.reply({
+            content: "👤 **Selecione o membro:**",
+            components: [
+              new ActionRowBuilder().addComponents(
+                new UserSelectMenuBuilder()
+                  .setCustomId(`aux_member_select|${ticket.id}`)
+                  .setPlaceholder("Selecionar membro")
+                  .setMinValues(1)
+                  .setMaxValues(1)
+              )
+            ],
+            flags: MessageFlags.Ephemeral
+          });
+        }
+
+        if (menu === "aux_menu" && value === "rename") {
+          const modal = new ModalBuilder()
+            .setCustomId(`ticket_rename|${ticket.id}`)
+            .setTitle("Mudar nome do canal");
+
+          modal.addComponents(
+            new ActionRowBuilder().addComponents(
+              new TextInputBuilder()
+                .setCustomId("ticket_name")
+                .setLabel("Novo nome do canal")
+                .setPlaceholder("Ex.: atendimento-joao")
+                .setStyle(TextInputStyle.Short)
+                .setRequired(true)
+                .setMaxLength(100)
+            )
+          );
+
+          return interaction.showModal(modal);
+        }
+      }
     }
 
     /* ----------------------------------------------------
