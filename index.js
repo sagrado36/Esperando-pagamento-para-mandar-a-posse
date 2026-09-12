@@ -183,8 +183,50 @@ let db = loadDatabase();
 // Configurações temporárias do comando /fila por usuário.
 const filaSetup = new Map();
 
+let saveTimer = null;
+let saveInProgress = false;
+let savePending = false;
+let shutdownStarted = false;
+
+async function flushDatabase() {
+  if (saveInProgress || !savePending) return;
+  saveInProgress = true;
+  savePending = false;
+
+  try {
+    const data = JSON.stringify(db, null, 2);
+    const tempFile = `${DATA_FILE}.tmp`;
+    await fs.promises.writeFile(tempFile, data, "utf8");
+    await fs.promises.rename(tempFile, DATA_FILE);
+  } catch (error) {
+    savePending = true;
+    console.error("❌ Erro ao salvar o banco:", error);
+  } finally {
+    saveInProgress = false;
+
+    if (savePending && !shutdownStarted) {
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => {
+        flushDatabase().catch(error =>
+          console.error("❌ Erro no salvamento agendado:", error)
+        );
+      }, 500);
+    }
+  }
+}
+
 function saveDatabase() {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2));
+  savePending = true;
+
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+  }
+
+  saveTimer = setTimeout(() => {
+    flushDatabase().catch(error =>
+      console.error("❌ Erro no salvamento agendado:", error)
+    );
+  }, 500);
 }
 
 /* ========================================================
@@ -998,17 +1040,15 @@ async function registerCommands() {
       .setDescription("Configura o sistema do bot.")
       .setDefaultMemberPermissions(null),
 
-    // /fila continua sendo a fila normal de apostas.
     new SlashCommandBuilder()
       .setName("fila")
-      .setDescription("Cria e publica as filas normais de apostas.")
-      .setDefaultMemberPermissions(null),
-
-    // O sistema de Streamer fica separado para não alterar o /fila original.
-    new SlashCommandBuilder()
-      .setName("fila-streamer")
-      .setDescription("Cria uma fila exclusiva para um Influencer/Streamer.")
-      .setDefaultMemberPermissions(null),
+      .setDescription("Cria e publica as filas de apostas.")
+      .setDefaultMemberPermissions(null)
+      .addSubcommand(subcommand =>
+        subcommand
+          .setName("streamer")
+          .setDescription("Cria uma fila exclusiva para um Influencer/Streamer.")
+      ),
 
     new SlashCommandBuilder()
       .setName("cadastro")
@@ -1367,8 +1407,11 @@ client.on("interactionCreate", async interaction => {
         return interaction.showModal(modal);
       }
 
-      /* /fila-streamer */
-      if (interaction.commandName === "fila-streamer") {
+      /* /fila */
+      if (interaction.commandName === "fila") {
+        const subcommand = interaction.options.getSubcommand(false);
+
+        if (subcommand === "streamer") {
           if (!(await requireStreamer(interaction))) return;
 
           if (!db.config.streamerRoleId) {
@@ -1409,10 +1452,8 @@ client.on("interactionCreate", async interaction => {
           );
 
           return interaction.showModal(modal);
-      }
+        }
 
-      /* /fila normal */
-      if (interaction.commandName === "fila") {
         filaSetup.set(interaction.user.id, {
           format: null,
           modality: null,
@@ -3103,29 +3144,42 @@ async function refreshQueueMessage(queue, guild) {
   }).catch(() => {});
 }
 
+let maintenanceRunning = false;
+
 setInterval(async () => {
+  if (maintenanceRunning) return;
+
+  maintenanceRunning = true;
+
   try {
     for (const guild of client.guilds.cache.values()) {
       for (const queue of Object.values(db.queues)) {
-        if (queue.channelId) {
-          await refreshQueueMessage(queue, guild);
-        }
+        if (!queue.channelId) continue;
+        if (queue.guildId && queue.guildId !== guild.id) continue;
+
+        await refreshQueueMessage(queue, guild);
       }
 
-      if (db.config.mediatorQueueChannelId) {
+      if (
+        db.config.mediatorQueueChannelId &&
+        (!db.config.guildId || db.config.guildId === guild.id)
+      ) {
         await updateMediatorQueueMessage(guild);
       }
 
       for (const queue of Object.values(db.streamerQueues || {})) {
-        if (queue.channelId) {
-          await refreshStreamerQueueMessage(queue, guild);
-        }
+        if (!queue.channelId) continue;
+        if (queue.guildId && queue.guildId !== guild.id) continue;
+
+        await refreshStreamerQueueMessage(queue, guild);
       }
     }
   } catch (error) {
     console.error("❌ Erro na manutenção:", error);
+  } finally {
+    maintenanceRunning = false;
   }
-}, 60000);
+}, 300000);
 
 /* ========================================================
    SALVAMENTO E ERROS
@@ -3139,14 +3193,40 @@ process.on("uncaughtException", error => {
   console.error("❌ Uncaught Exception:", error);
 });
 
-process.on("SIGINT", () => {
-  saveDatabase();
+async function shutdown(signal) {
+  if (shutdownStarted) return;
+  shutdownStarted = true;
+
+  console.log(`🛑 ${signal} recebido. Salvando banco antes de encerrar...`);
+
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+
+  savePending = true;
+
+  try {
+    await flushDatabase();
+  } catch (error) {
+    console.error("❌ Erro ao salvar durante o encerramento:", error);
+  }
+
   process.exit(0);
+}
+
+process.on("SIGINT", () => {
+  shutdown("SIGINT").catch(error => {
+    console.error("❌ Erro no encerramento:", error);
+    process.exit(1);
+  });
 });
 
 process.on("SIGTERM", () => {
-  saveDatabase();
-  process.exit(0);
+  shutdown("SIGTERM").catch(error => {
+    console.error("❌ Erro no encerramento:", error);
+    process.exit(1);
+  });
 });
 
 /* ========================================================
