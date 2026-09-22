@@ -114,6 +114,8 @@ function createDefaultDatabase() {
       supportRoleId: null,
       supervisorRoleId: null,
       auxiliaryRoleId: null,
+      directorRoleId: null,
+      subDonRoleId: null,
       admins: [],
       fee: 0.01,
       embedColor: "#5865F2",
@@ -322,6 +324,7 @@ function configEmbed() {
     "",
     "🎫 **Tickets**",
     `Suporte: ${c.supportRoleId ? `<@&${c.supportRoleId}>` : "❌"} • Supervisor: ${c.supervisorRoleId ? `<@&${c.supervisorRoleId}>` : "❌"} • Auxiliar: ${c.auxiliaryRoleId ? `<@&${c.auxiliaryRoleId}>` : "❌"}`,
+    `Diretor: ${c.directorRoleId ? `<@&${c.directorRoleId}>` : "❌"} • Sub Don: ${c.subDonRoleId ? `<@&${c.subDonRoleId}>` : "❌"}`,
     `Canais configurados: ${[c.ticketSupportChannelId, c.ticketRefundChannelId, c.ticketVacanciesChannelId, c.ticketEventChannelId].filter(Boolean).length}/4`,
     "",
     "💰 **Apostas**",
@@ -379,13 +382,7 @@ function streamerCheck(interaction) {
 }
 
 function supportCheck(interaction) {
-  const roles = [
-    db.config.supportRoleId,
-    db.config.supervisorRoleId,
-    db.config.auxiliaryRoleId
-  ].filter(Boolean);
-
-  return roles.some(roleId =>
+  return ticketResponsibleRoleIds().some(roleId =>
     interaction.member?.roles?.cache?.has(roleId)
   );
 }
@@ -394,7 +391,7 @@ async function requireSupport(interaction) {
   if (!supportCheck(interaction)) {
     await deny(
       interaction,
-      "❌ Apenas os cargos de Suporte, Supervisor ou Auxiliar podem usar esta função."
+      "❌ Apenas os cargos responsáveis pelos tickets podem usar esta função."
     );
     return false;
   }
@@ -1127,6 +1124,9 @@ function ticketCreationPanelEmbed() {
   return embed;
 }
 
+// Prefix commands do Discord não possuem resposta efêmera por mensagem.
+// Por isso o `.aux` publica o painel no próprio ticket e as interações são
+// autorizadas individualmente: somente cargos responsáveis podem utilizá-lo.
 function ticketPanelComponents(ticketId, claimedBy = null) {
   return [
     new ActionRowBuilder().addComponents(
@@ -1161,8 +1161,78 @@ function ticketPanelEmbed(ticket, guild) {
     `🟢 **Status:** ${ticket.status === "open" ? "Em atendimento" : "Finalizado"}`,
     "",
     "🛠️ **Ações disponíveis**",
-    "A equipe pode usar `.aux` para abrir o painel, finalizar o ticket ou adicionar um membro."
+    "O responsável pode usar `.aux` para abrir o painel de gerenciamento neste ticket."
   ].join("\n"));
+}
+
+
+function ticketResponsibleRoleIds() {
+  return [
+    db.config.supportRoleId,
+    db.config.supervisorRoleId,
+    db.config.auxiliaryRoleId,
+    db.config.directorRoleId,
+    db.config.subDonRoleId
+  ].filter(Boolean);
+}
+
+function memberIsTicketResponsible(member) {
+  if (!member?.roles?.cache) return false;
+  return ticketResponsibleRoleIds().some(roleId => member.roles.cache.has(roleId));
+}
+
+async function claimTicket(ticket, ticketChannel, userId, displayName, sourceInteraction = null) {
+  if (!ticket || ticket.status !== "open") {
+    throw new Error("Este ticket não está mais aberto.");
+  }
+
+  if (ticket.claimedBy && ticket.claimedBy !== userId) {
+    throw new Error(`Este ticket já foi assumido por <@${ticket.claimedBy}>.`);
+  }
+
+  // Em vez de buscar todos os membros do servidor, trabalhamos somente
+  // com os membros que realmente estão dentro da thread privada.
+  let threadMembers = ticketChannel.members?.cache;
+  if (ticketChannel.members?.fetch) {
+    threadMembers = await ticketChannel.members.fetch().catch(() => threadMembers);
+  }
+
+  for (const member of threadMembers?.values?.() || []) {
+    if (
+      memberIsTicketResponsible(member) &&
+      member.id !== userId &&
+      member.id !== ticket.creatorId
+    ) {
+      await ticketChannel.members.remove(member.id).catch(() => {});
+    }
+  }
+
+  await ticketChannel.members.add(userId).catch(error => {
+    throw new Error("Não foi possível assumir o ticket. Verifique se o bot possui a permissão **Gerenciar Threads**.");
+  });
+
+  ticket.claimedBy = userId;
+  ticket.claimedAt = Date.now();
+  saveDatabase();
+
+  const cleanName = String(displayName || `usuario-${userId.slice(-5)}`)
+    .replace(/[^a-zA-Z0-9À-ÿ _-]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 82) || `usuario-${userId.slice(-5)}`;
+
+  const newName = `🔧・RESOLVENDO・${cleanName}`.slice(0, 100);
+  await ticketChannel.setName(newName).catch(() => {});
+
+  await ticketChannel.send({
+    content: `<@${userId}>`,
+    embeds: [makeEmbed("🟢 TICKET ASSUMIDO", [
+      `👤 **Responsável:** <@${userId}>`,
+      "🔧 Este atendimento está sob sua responsabilidade."
+    ].join("\n"))]
+  }).catch(() => {});
+
+  return newName;
 }
 
 async function createTicketChannel(interaction, ticketType = "support") {
@@ -1211,11 +1281,7 @@ async function createTicketChannel(interaction, ticketType = "support") {
   await thread.members.add(interaction.user.id).catch(() => {});
 
   // Todos os responsáveis configurados recebem acesso inicialmente.
-  const supportRoles = [
-    db.config.supportRoleId,
-    db.config.supervisorRoleId,
-    db.config.auxiliaryRoleId
-  ].filter(Boolean);
+  const supportRoles = ticketResponsibleRoleIds();
   const responsibleRoleMentions = [...new Set(supportRoles)].map(roleId => `<@&${roleId}>`);
 
   let members = guild.members.cache;
@@ -1346,7 +1412,7 @@ function configButtons() {
           { label: "Canal das Apostas", value: "config_bet_channel", emoji: "🎮", description: "Escolha o canal onde as apostas privadas serão criadas como filas." },
           { label: "Categoria Streamer", value: "config_streamer_category", emoji: "🎥", description: "Escolha onde as filas de Streamer serão criadas." },
           { label: "Fila de Mediadores", value: "config_mediator_queue", emoji: "👨‍⚖️", description: "Publique ou atualize a fila de Mediadores." },
-          { label: "Cargos dos Tickets", value: "config_support_roles", emoji: "🎫", description: "Configure Suporte, Supervisor e Auxiliar." },
+          { label: "Cargos dos Tickets", value: "config_support_roles", emoji: "🎫", description: "Configure Suporte, Supervisor, Auxiliar, Diretor e Sub Don." },
           { label: "Canais dos Tickets", value: "config_ticket_channels", emoji: "📢", description: "Defina o canal de cada tipo de ticket." },
           { label: "Configurar painel de Tickets", value: "config_ticket_panel", emoji: "🖼️", description: "Edite título, descrição, banner, thumbnail e cor." },
           { label: "Ver configuração completa", value: "config_view", emoji: "🔎", description: "Veja um resumo de todas as configurações." },
@@ -1619,20 +1685,37 @@ client.on("messageCreate", async message => {
         return message.reply("❌ Apenas os cargos de Suporte, Supervisor ou Auxiliar podem usar `.aux`.");
       }
 
-      // Prefix commands não suportam mensagens efêmeras. O comando é apagado
-      // do canal e o painel privado é enviado por DM somente para quem usou `.aux`.
+      // `.aux` deve abrir o painel DENTRO DO PRÓPRIO TICKET.
+      // O comando é apagado para não poluir o atendimento.
+      // Ações do painel continuam bloqueadas para qualquer pessoa que não
+      // seja responsável pelo ticket.
       await message.delete().catch(() => {});
-      try {
-        await message.author.send({
-          embeds: [ticketPanelEmbed(ticket, message.guild)],
-          components: ticketPanelComponents(ticket.id, ticket.claimedBy)
-        });
-      } catch {
-        await message.channel.send({
-          content: `<@${message.author.id}> não foi possível enviar o painel privado por DM. Ative as mensagens diretas deste servidor.`,
-          deleteAfter: 8000
-        }).catch(() => {});
+
+      // Remove painéis .aux anteriores enviados pelo bot neste ticket para
+      // manter apenas o painel atual visível e organizado.
+      const recent = await message.channel.messages.fetch({ limit: 25 }).catch(() => null);
+      if (recent) {
+        const oldPanels = recent.filter(m =>
+          m.author?.id === client.user.id &&
+          m.embeds?.[0]?.title === "🛠️ PAINEL DO RESPONSÁVEL"
+        );
+        if (oldPanels.size) {
+          await message.channel.bulkDelete(oldPanels, true).catch(async () => {
+            for (const old of oldPanels.values()) await old.delete().catch(() => {});
+          });
+        }
       }
+
+      await message.channel.send({
+        embeds: [makeEmbed("🛠️ PAINEL DO RESPONSÁVEL", [
+          `🎫 **Ticket:** <#${ticket.channelId}>`,
+          `👤 **Responsável:** <@${message.author.id}>`,
+          "",
+          "Use o menu abaixo para gerenciar este atendimento.",
+          "🔒 Somente cargos responsáveis podem executar as ações."
+        ].join("\n"))],
+        components: ticketPanelComponents(ticket.id, ticket.claimedBy)
+      }).catch(error => console.error("❌ Erro ao publicar painel .aux no ticket:", error));
       return;
     }
 
@@ -2033,6 +2116,16 @@ client.on("interactionCreate", async interaction => {
               new RoleSelectMenuBuilder()
                 .setCustomId("set_auxiliary_role")
                 .setPlaceholder("Selecionar cargo Auxiliar")
+            ),
+            new ActionRowBuilder().addComponents(
+              new RoleSelectMenuBuilder()
+                .setCustomId("set_director_role")
+                .setPlaceholder("Selecionar cargo Diretor")
+            ),
+            new ActionRowBuilder().addComponents(
+              new RoleSelectMenuBuilder()
+                .setCustomId("set_subdon_role")
+                .setPlaceholder("Selecionar cargo Sub Don")
             )
           ],
           flags: MessageFlags.Ephemeral
@@ -2941,53 +3034,31 @@ client.on("interactionCreate", async interaction => {
 
       const ticketId = interaction.customId.split("|")[1];
       const ticket = db.tickets?.[ticketId];
-      if (!ticket || ticket.guildId !== interaction.guild.id || ticket.channelId !== interaction.channel.id || ticket.status !== "open") {
+
+      if (
+        !ticket ||
+        ticket.guildId !== interaction.guild?.id ||
+        ticket.channelId !== interaction.channel?.id ||
+        ticket.status !== "open"
+      ) {
         return deny(interaction, "❌ Este ticket não está mais aberto.");
       }
 
-      if (ticket.claimedBy && ticket.claimedBy !== interaction.user.id) {
-        return deny(interaction, `❌ Este ticket já foi assumido por <@${ticket.claimedBy}>.`);
+      try {
+        const displayName =
+          interaction.member?.displayName ||
+          interaction.user.globalName ||
+          interaction.user.username;
+
+        await claimTicket(ticket, interaction.channel, interaction.user.id, displayName);
+
+        return interaction.update({
+          components: ticketPanelComponents(ticket.id, interaction.user.id)
+        });
+      } catch (error) {
+        console.error("❌ Erro ao assumir ticket:", error);
+        return deny(interaction, `❌ ${error.message || "Não foi possível assumir o ticket."}`);
       }
-
-      const supportRoles = [
-        db.config.supportRoleId,
-        db.config.supervisorRoleId,
-        db.config.auxiliaryRoleId
-      ].filter(Boolean);
-
-      let members = interaction.guild.members.cache;
-      if (members.size < interaction.guild.memberCount) {
-        members = await interaction.guild.members.fetch().catch(() => interaction.guild.members.cache);
-      }
-
-      for (const member of members.values()) {
-        const responsible = supportRoles.some(roleId => member.roles.cache.has(roleId));
-        if (responsible && member.id !== interaction.user.id && member.id !== ticket.creatorId) {
-          await interaction.channel.members.remove(member.id).catch(() => {});
-        }
-      }
-
-      await interaction.channel.members.add(interaction.user.id).catch(() => {});
-      ticket.claimedBy = interaction.user.id;
-      ticket.claimedAt = Date.now();
-      saveDatabase();
-
-      const displayName = interaction.member?.displayName || interaction.user.globalName || interaction.user.username;
-      const safeDisplayName = displayName.replace(/[^a-zA-Z0-9À-ÿ _-]/g, "").trim() || interaction.user.username;
-      const newName = `🔧・RESOLVENDO・${safeDisplayName}`.slice(0, 100);
-      await interaction.channel.setName(newName).catch(() => {});
-
-      await interaction.channel.send({
-        content: `<@${interaction.user.id}>`,
-        embeds: [makeEmbed("🟢 TICKET ASSUMIDO", [
-          `👤 **Responsável:** <@${interaction.user.id}>`,
-          "🔧 O atendimento está sendo resolvido."
-        ].join("\n"))]
-      }).catch(() => {});
-
-      return interaction.update({
-        components: ticketPanelComponents(ticket.id, interaction.user.id)
-      });
     }
 
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith("aux_panel|")) {
@@ -2998,13 +3069,16 @@ client.on("interactionCreate", async interaction => {
         return deny(interaction, "❌ Este ticket não está mais aberto.");
       }
 
-      const ticketGuild = interaction.guild || client.guilds.cache.get(ticket.guildId) || await client.guilds.fetch(ticket.guildId).catch(() => null);
-      const ticketMember = ticketGuild ? await ticketGuild.members.fetch(interaction.user.id).catch(() => null) : null;
-      const hasSupportRole = Boolean(ticketMember && [
-        db.config.supportRoleId,
-        db.config.supervisorRoleId,
-        db.config.auxiliaryRoleId
-      ].filter(Boolean).some(roleId => ticketMember.roles.cache.has(roleId)));
+      const ticketGuild =
+        interaction.guild ||
+        client.guilds.cache.get(ticket.guildId) ||
+        await client.guilds.fetch(ticket.guildId).catch(() => null);
+
+      const ticketMember = ticketGuild
+        ? await ticketGuild.members.fetch(interaction.user.id).catch(() => null)
+        : null;
+
+      const hasSupportRole = memberIsTicketResponsible(ticketMember);
 
       if (!hasSupportRole) {
         return deny(interaction, "❌ Apenas os cargos responsáveis pelos tickets podem usar este painel.");
@@ -3016,42 +3090,23 @@ client.on("interactionCreate", async interaction => {
       const action = interaction.values[0];
 
       if (action === "claim") {
-        if (ticket.claimedBy && ticket.claimedBy !== interaction.user.id) {
-          return deny(interaction, `❌ Este ticket já foi assumido por <@${ticket.claimedBy}>.`);
+        try {
+          const displayName =
+            ticketMember?.displayName ||
+            interaction.user.globalName ||
+            interaction.user.username;
+
+          await claimTicket(ticket, ticketChannel, interaction.user.id, displayName);
+
+          return interaction.update({
+            content: `✅ Você assumiu este ticket.`,
+            embeds: [],
+            components: []
+          });
+        } catch (error) {
+          console.error("❌ Erro ao assumir ticket pelo painel:", error);
+          return deny(interaction, `❌ ${error.message || "Não foi possível assumir o ticket."}`);
         }
-
-        const supportRoles = [
-          db.config.supportRoleId,
-          db.config.supervisorRoleId,
-          db.config.auxiliaryRoleId
-        ].filter(Boolean);
-
-        let members = interaction.guild.members.cache;
-        if (members.size < interaction.guild.memberCount) {
-          members = await interaction.guild.members.fetch().catch(() => interaction.guild.members.cache);
-        }
-
-        for (const member of members.values()) {
-          const responsible = supportRoles.some(roleId => member.roles.cache.has(roleId));
-          if (responsible && member.id !== interaction.user.id && member.id !== ticket.creatorId) {
-            await ticketChannel.members.remove(member.id).catch(() => {});
-          }
-        }
-
-        await ticketChannel.members.add(interaction.user.id).catch(() => {});
-        ticket.claimedBy = interaction.user.id;
-        saveDatabase();
-
-        await ticketChannel.send({
-          content: `<@${interaction.user.id}>`,
-          embeds: [makeEmbed("👤 TICKET ASSUMIDO", `O atendimento foi assumido por <@${interaction.user.id}>.`)]
-        }).catch(() => {});
-
-        return interaction.update({
-          content: `✅ Você assumiu este ticket.`,
-          embeds: [],
-          components: []
-        });
       }
 
       if (action === "finish") {
@@ -3110,28 +3165,40 @@ client.on("interactionCreate", async interaction => {
       const ticketId = interaction.customId.split("|")[1];
       const ticket = db.tickets?.[ticketId];
 
-      if (!ticket || ticket.guildId !== interaction.guild.id || ticket.channelId !== interaction.channel.id || ticket.status !== "open") {
+      if (!ticket || ticket.status !== "open") {
         return deny(interaction, "❌ Este ticket não está mais aberto.");
       }
 
+      const ticketGuild =
+        interaction.guild ||
+        client.guilds.cache.get(ticket.guildId) ||
+        await client.guilds.fetch(ticket.guildId).catch(() => null);
+
+      if (!ticketGuild) {
+        return deny(interaction, "❌ Não foi possível localizar o servidor deste ticket.");
+      }
+
+      const ticketChannel =
+        await ticketGuild.channels.fetch(ticket.channelId).catch(() => null);
+
+      if (!ticketChannel) {
+        return deny(interaction, "❌ O canal deste ticket não foi encontrado.");
+      }
+
       const memberId = interaction.values[0];
-      const member = await interaction.guild.members.fetch(memberId).catch(() => null);
+      const member = await ticketGuild.members.fetch(memberId).catch(() => null);
 
       if (!member) {
         return deny(interaction, "❌ Membro não encontrado neste servidor.");
       }
 
       try {
-        await interaction.channel.permissionOverwrites.edit(member.id, {
-          ViewChannel: true,
-          SendMessages: true,
-          ReadMessageHistory: true
-        });
+        await ticketChannel.members.add(member.id);
 
         ticket.addedMembers = [...new Set([...(ticket.addedMembers || []), member.id])];
         saveDatabase();
 
-        await interaction.channel.send({
+        await ticketChannel.send({
           embeds: [makeEmbed("👤 MEMBRO ADICIONADO", [
             `**${member}** foi adicionado ao ticket.`,
             `🛠️ **Adicionado por:** <@${interaction.user.id}>`
@@ -3182,6 +3249,14 @@ client.on("interactionCreate", async interaction => {
 
       if (interaction.customId === "set_auxiliary_role") {
         db.config.auxiliaryRoleId = roleId;
+      }
+
+      if (interaction.customId === "set_director_role") {
+        db.config.directorRoleId = roleId;
+      }
+
+      if (interaction.customId === "set_subdon_role") {
+        db.config.subDonRoleId = roleId;
       }
 
       saveDatabase();
@@ -3448,11 +3523,7 @@ client.on("interactionCreate", async interaction => {
 
         const ticketGuild = interaction.guild || client.guilds.cache.get(ticket.guildId) || await client.guilds.fetch(ticket.guildId).catch(() => null);
         const ticketMember = ticketGuild ? await ticketGuild.members.fetch(interaction.user.id).catch(() => null) : null;
-        const hasSupportRole = Boolean(ticketMember && [
-          db.config.supportRoleId,
-          db.config.supervisorRoleId,
-          db.config.auxiliaryRoleId
-        ].filter(Boolean).some(roleId => ticketMember.roles.cache.has(roleId)));
+        const hasSupportRole = memberIsTicketResponsible(ticketMember);
         if (!hasSupportRole) return deny(interaction, "❌ Apenas os cargos responsáveis pelos tickets podem usar esta função.");
 
         const ticketChannel = ticketGuild ? await ticketGuild.channels.fetch(ticket.channelId).catch(() => null) : null;
@@ -4156,6 +4227,25 @@ async function refreshQueueMessage(queue, guild) {
   }).catch(() => {});
 }
 
+async function keepOpenTicketsAlive(guild) {
+  const openTickets = Object.values(db.tickets || {}).filter(
+    ticket => ticket.guildId === guild.id && ticket.status === "open"
+  );
+
+  for (const ticket of openTickets) {
+    const channel = await guild.channels.fetch(ticket.channelId).catch(() => null);
+    if (!channel) continue;
+
+    if (channel.isThread?.() && channel.archived) {
+      await channel.setArchived(false, "Manter ticket aberto até ser finalizado").catch(() => {});
+    }
+
+    if (channel.isThread?.() && channel.locked) {
+      await channel.setLocked(false, "Reativar ticket aberto").catch(() => {});
+    }
+  }
+}
+
 let maintenanceRunning = false;
 
 setInterval(async () => {
@@ -4174,6 +4264,8 @@ setInterval(async () => {
 
       /* A fila de Mediadores só é publicada/atualizada quando configurada pelo ADM. */
 
+      await keepOpenTicketsAlive(guild);
+
       for (const queue of Object.values(db.streamerQueues || {})) {
         if (!queue.channelId) continue;
         if (queue.guildId && queue.guildId !== guild.id) continue;
@@ -4187,6 +4279,28 @@ setInterval(async () => {
     maintenanceRunning = false;
   }
 }, 300000);
+
+/* ========================================================
+   PROTEÇÃO DE CONEXÃO / ALTA CARGA
+======================================================== */
+
+client.on("error", error => {
+  console.error("❌ Erro do cliente Discord:", error);
+});
+
+client.on("warn", warning => {
+  console.warn("⚠️ Discord:", warning);
+});
+
+client.on("shardError", error => {
+  console.error("❌ Erro de conexão do Discord:", error);
+});
+
+client.on("rateLimit", info => {
+  console.warn(
+    `⚠️ Rate limit do Discord: ${info?.route || "rota desconhecida"} (${info?.timeout || 0}ms)`
+  );
+});
 
 /* ========================================================
    SALVAMENTO E ERROS
