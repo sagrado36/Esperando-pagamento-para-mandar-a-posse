@@ -1264,7 +1264,6 @@ function configButtons() {
         .setPlaceholder("⚙️ Selecione o que deseja configurar")
         .addOptions([
           { label: "Cargos da equipe", value: "config_roles", emoji: "👥", description: "Configure Mediador, Analista e Streamer." },
-          { label: "Administradores", value: "config_admins", emoji: "👑", description: "Cadastre ou remova até 20 administradores." },
           { label: "Taxa das apostas", value: "config_fee", emoji: "💰", description: "Defina a taxa entre R$0,01 e R$0,50." },
           { label: "Aparência geral", value: "config_appearance", emoji: "🎨", description: "Configure cor e foto padrão das embeds." },
           { label: "Canais do sistema", value: "config_channels", emoji: "📢", description: "Defina os canais usados pelas análises e mediadores." },
