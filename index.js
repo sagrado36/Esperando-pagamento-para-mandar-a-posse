@@ -529,18 +529,7 @@ function queueOneVsOneModeComponents(format, modality, value, channelId) {
 }
 
 function mediatorQueueEmbed() {
-  const list = db.mediatorQueue.length
-    ? db.mediatorQueue.map((id, index) => `**${index + 1}.** <@${id}>`).join("\\n")
-    : "_Nenhum Mediador aguardando._";
-  const next = db.mediatorQueue.length > 0
-    ? db.mediatorQueue[db.mediatorRotation % db.mediatorQueue.length]
-    : null;
-
-  return makeEmbed("👨‍⚖️ FILA DE MEDIADORES", [
-    `👥 **Na fila:** ${db.mediatorQueue.length}`,
-    list,
-    `🎯 **Próximo:** ${next ? `<@${next}>` : "_Nenhum_"}`
-  ].join("\\n"));
+  return makeEmbed("", "**FILA MEDIADORES**");
 }
 
 function mediatorQueueComponents() {
@@ -550,8 +539,8 @@ function mediatorQueueComponents() {
 function safeMediatorQueueComponents() {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId("mediator_join").setLabel("Entrar").setEmoji("➕").setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId("mediator_leave").setLabel("Sair").setEmoji("🚪").setStyle(ButtonStyle.Danger)
+      new ButtonBuilder().setCustomId("mediator_join").setLabel("Entrar").setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId("mediator_leave").setLabel("Sair").setStyle(ButtonStyle.Danger)
     )
   ];
 }
