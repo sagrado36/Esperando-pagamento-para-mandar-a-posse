@@ -6,6 +6,7 @@
 REQUISITOS:
   Node.js 18.17+
   discord.js 14+
+  qrcode (npm install qrcode)
 
 VARIÁVEIS DE AMBIENTE:
   DISCORD_TOKEN = token do bot
@@ -15,7 +16,7 @@ VARIÁVEIS DE AMBIENTE:
 COMANDOS:
   /config
   /fila
-  /cadastro
+  /painel cadastro
   /embeds
   /criar ticket
   /fila streamer
@@ -27,6 +28,8 @@ COMANDOS:
 
 REGRAS:
   - Embeds organizadas e autoexplicativas.
+  - QR Code Pix gerado automaticamente a partir da chave Pix.
+  - Pagamentos enviados somente como mensagens normais, sem embed.
   - Taxa configurável entre R$0,01 e R$0,50.
   - Até 20 ADMs cadastrados.
   - Valores de fila: 0,30 / 0,50 / 0,75 / 1 / 2 / 3 / 5 / 7 / 10 / 20 / 50 / 100.
@@ -67,6 +70,7 @@ const {
 
 const fs = require("fs");
 const path = require("path");
+const QRCode = require("qrcode");
 
 /* ========================================================
    AMBIENTE
@@ -461,17 +465,23 @@ async function playerSelectOptions(guild, players, emoji) {
 function queueDescription(queue) {
   const total = requiredPlayers(queue.format);
   const filled = queue.players.length;
-  const remaining = Math.max(total - filled, 0);
   const playersText = filled
-    ? queue.players.map((id, index) => `**${index + 1}.** <@${id}>`).join("\\n")
-    : "_Nenhum jogador._";
+    ? queue.players.map((id, index) => `${index + 1}. <@${id}>`).join("\\n")
+    : "Nenhum jogador na fila.";
 
   return [
-    `🎮 **${queue.format}** • ${modalityName(queue.modality)} • **${money(queue.value)}**`,
-    `👥 **Jogadores:** ${filled}/${total}`,
-    playersText,
-    remaining > 0 ? `⏳ Faltam **${remaining}** jogador${remaining === 1 ? "" : "es"}.` : "🟢 **Fila completa!**"
+    "**Jogadores**",
+    playersText
   ].join("\\n");
+}
+
+function queueEmbed(queue) {
+  // Visual das filas seguindo o modelo do anexo:
+  // título com formato + modalidade + valor e barra lateral vermelha.
+  return new EmbedBuilder()
+    .setColor("#ED1C24")
+    .setTitle(`${queue.format} ${modalityName(queue.modality)} | ${money(queue.value)}`)
+    .setDescription(queueDescription(queue));
 }
 
 function queueComponents(queue) {
@@ -580,7 +590,70 @@ function mediatorPanelComponents(betId) {
   ];
 }
 
-function paymentMessage(bet) {
+function normalizePixText(value, maxLength) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^A-Za-z0-9 .-]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toUpperCase()
+    .slice(0, maxLength);
+}
+
+function pixTlv(id, value) {
+  const text = String(value ?? "");
+  return `${id}${String(text.length).padStart(2, "0")}${text}`;
+}
+
+function crc16Ccitt(text) {
+  let crc = 0xFFFF;
+
+  for (const char of Buffer.from(text, "utf8")) {
+    crc ^= char << 8;
+    for (let i = 0; i < 8; i++) {
+      crc = (crc & 0x8000)
+        ? ((crc << 1) ^ 0x1021) & 0xFFFF
+        : (crc << 1) & 0xFFFF;
+    }
+  }
+
+  return crc.toString(16).toUpperCase().padStart(4, "0");
+}
+
+function buildPixPayload({ key, name, city = process.env.PIX_CITY || "GOIANIA" }) {
+  const merchantName = normalizePixText(name, 25) || "PAGAMENTO PIX";
+  const merchantCity = normalizePixText(city, 15) || "GOIANIA";
+  const pixKey = String(key || "").trim();
+
+  if (!pixKey) {
+    throw new Error("Chave Pix não informada.");
+  }
+
+  if (pixKey.length > 77) {
+    throw new Error("A chave Pix excede o limite permitido.");
+  }
+
+  const merchantAccountInfo = [
+    pixTlv("00", "BR.GOV.BCB.PIX"),
+    pixTlv("01", pixKey)
+  ].join("");
+
+  const payloadWithoutCrc = [
+    pixTlv("00", "01"),
+    pixTlv("26", merchantAccountInfo),
+    pixTlv("52", "0000"),
+    pixTlv("53", "986"),
+    pixTlv("58", "BR"),
+    pixTlv("59", merchantName),
+    pixTlv("60", merchantCity),
+    pixTlv("62", pixTlv("05", "***"))
+  ].join("") + "6304";
+
+  return payloadWithoutCrc + crc16Ccitt(payloadWithoutCrc);
+}
+
+async function paymentMessage(bet) {
   const entries = bet.mediatorId && db.pix[bet.mediatorId]
     ? [[bet.mediatorId, db.pix[bet.mediatorId]]]
     : Object.entries(db.pix);
@@ -594,33 +667,54 @@ function paymentMessage(bet) {
         `💰 **Valor:** ${money(amountToPay)}`,
         "",
         "⚠️ **PIX não configurado.**",
-        "Um ADM deve cadastrar o Pix em `/cadastro`.",
+        "Um ADM deve cadastrar o Pix pelo `/painel cadastro`.",
         "━━━━━━━━━━━━━━━━━━━━"
       ].join("\n")
     };
   }
 
   const [, pix] = entries[0];
-  const content = [
+  const lines = [
     "💳 **PAGAMENTO DA APOSTA**",
     "━━━━━━━━━━━━━━━━━━━━",
     `💰 **Valor:** ${money(amountToPay)}`,
     `👤 **Titular:** ${pix.name}`,
     `🔑 **Chave PIX:** \`${pix.key}\``,
-    pix.qr && validUrl(pix.qr)
-      ? `🔗 **Link do QR Code:** ${pix.qr}`
-      : "⚠️ **QR Code não cadastrado.**",
     "",
+    "📷 **QR Code Pix:** imagem anexada abaixo.",
     "📌 **Faça o pagamento e aguarde a orientação do Mediador.**",
     "━━━━━━━━━━━━━━━━━━━━"
-  ].join("\n");
+  ];
 
-  const result = { content };
+  const result = { content: lines.join("\n") };
 
-  // O pagamento fica em mensagem normal. O QR aparece separadamente
-  // apenas como imagem, sem colocar os dados de pagamento em embed.
-  if (pix.qr && validUrl(pix.qr)) {
-    result.embeds = [new EmbedBuilder().setImage(pix.qr).setColor(db.config.embedColor || "#5865F2")];
+  // O pagamento é SEMPRE uma mensagem normal.
+  // O QR é anexado como imagem, sem embed.
+  if (pix.key) {
+    try {
+      const payload = pix.qrPayload || buildPixPayload({
+        key: pix.key,
+        name: pix.name
+      });
+      const qrBuffer = await QRCode.toBuffer(payload, {
+        type: "png",
+        width: 320,
+        margin: 2
+      });
+
+      result.files = [{
+        attachment: qrBuffer,
+        name: "pix-qrcode.png"
+      }];
+    } catch (error) {
+      console.error("❌ Erro ao gerar QR Code Pix:", error);
+      result.content += "\n⚠️ Não foi possível gerar o QR Code automaticamente.";
+    }
+  } else if (pix.qr && validUrl(pix.qr)) {
+    // Compatibilidade com cadastros antigos que ainda possuem URL de QR.
+    result.content += `\n🔗 **QR Code antigo:** ${pix.qr}`;
+  } else {
+    result.content += "\n⚠️ **QR Code não cadastrado.**";
   }
 
   return result;
@@ -1008,10 +1102,23 @@ const TICKET_TYPES = {
 function ticketCreationPanelComponents() {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId("ticket_create|support").setLabel("Suporte").setEmoji("🛠️").setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId("ticket_create|refund").setLabel("Reembolso").setEmoji("💰").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId("ticket_create|vacancies").setLabel("Vagas").setEmoji("📋").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId("ticket_create|event").setLabel("Receber Evento").setEmoji("🎉").setStyle(ButtonStyle.Success)
+      new StringSelectMenuBuilder()
+        .setCustomId("ticket_create_select")
+        .setPlaceholder("Selecione o tipo de atendimento")
+        .addOptions(
+          Object.entries(TICKET_TYPES).map(([value, type]) => ({
+            label: type.label,
+            value,
+            emoji: type.emoji,
+            description: value === "support"
+              ? "Atendimento geral."
+              : value === "refund"
+                ? "Solicitações de reembolso."
+                : value === "vacancies"
+                  ? "Dúvidas e solicitações sobre vagas."
+                  : "Atendimento para recebimento de eventos."
+          }))
+        )
     )
   ];
 }
@@ -1274,14 +1381,13 @@ async function registerCommands() {
       ),
 
     new SlashCommandBuilder()
-      .setName("cadastro")
-      .setDescription("Cadastra os dados Pix de um usuário.")
+      .setName("painel")
+      .setDescription("Abre painéis administrativos.")
       .setDefaultMemberPermissions(null)
-      .addUserOption(option =>
-        option
-          .setName("usuario")
-          .setDescription("Usuário que receberá o cadastro Pix.")
-          .setRequired(true)
+      .addSubcommand(subcommand =>
+        subcommand
+          .setName("cadastro")
+          .setDescription("Abre o painel de cadastro Pix.")
       ),
 
     new SlashCommandBuilder()
@@ -1666,45 +1772,35 @@ client.on("interactionCreate", async interaction => {
         return interaction.showModal(modal);
       }
 
-      /* /cadastro */
-      if (interaction.commandName === "cadastro") {
-        const user = interaction.options.getUser("usuario");
+      /* /painel cadastro */
+      if (
+        interaction.commandName === "painel" &&
+        interaction.options.getSubcommand() === "cadastro"
+      ) {
+        if (!(await requireAdmin(interaction))) return;
 
-        const modal = new ModalBuilder()
-          .setCustomId(`pix_register|${user.id}`)
-          .setTitle("Cadastro Pix");
-
-        modal.addComponents(
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder()
-              .setCustomId("pix_name")
-              .setLabel("Nome")
-              .setPlaceholder("Nome do titular do Pix")
-              .setStyle(TextInputStyle.Short)
-              .setRequired(true)
-              .setMaxLength(100)
-          ),
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder()
-              .setCustomId("pix_key")
-              .setLabel("Chave Pix")
-              .setPlaceholder("Digite a chave Pix")
-              .setStyle(TextInputStyle.Short)
-              .setRequired(true)
-              .setMaxLength(200)
-          ),
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder()
-              .setCustomId("pix_qr")
-              .setLabel("QR Code")
-              .setPlaceholder("URL da imagem do QR Code")
-              .setStyle(TextInputStyle.Short)
-              .setRequired(true)
-              .setMaxLength(500)
-          )
-        );
-
-        return interaction.showModal(modal);
+        return interaction.reply({
+          embeds: [
+            makeEmbed("💳 PAINEL DE CADASTRO PIX", [
+              "**Cadastre os dados que serão usados nos pagamentos das apostas.**",
+              "",
+              "👤 Informe **nome e sobrenome**.",
+              "🔑 Informe a **chave Pix**.",
+              "📷 O **QR Code será gerado automaticamente**.",
+              "",
+              "Clique no botão abaixo para abrir o cadastro."
+            ].join("\n"))
+          ],
+          components: [
+            new ActionRowBuilder().addComponents(
+              new ButtonBuilder()
+                .setCustomId("pix_open_register")
+                .setLabel("Cadastrar Pix")
+                .setEmoji("💳")
+                .setStyle(ButtonStyle.Success)
+            )
+          ]
+        });
       }
 
       /* /criar ticket */
@@ -1816,6 +1912,47 @@ client.on("interactionCreate", async interaction => {
 
     if (interaction.isButton()) {
       const [action, ...parts] = interaction.customId.split("|");
+
+      /* ABRIR CADASTRO PIX */
+      if (action === "pix_open_register") {
+        if (!(await requireAdmin(interaction))) return;
+
+        const modal = new ModalBuilder()
+          .setCustomId(`pix_register|${interaction.user.id}`)
+          .setTitle("Cadastro Pix");
+
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("pix_first_name")
+              .setLabel("Nome")
+              .setPlaceholder("Ex.: João")
+              .setStyle(TextInputStyle.Short)
+              .setRequired(true)
+              .setMaxLength(40)
+          ),
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("pix_last_name")
+              .setLabel("Sobrenome")
+              .setPlaceholder("Ex.: Silva")
+              .setStyle(TextInputStyle.Short)
+              .setRequired(true)
+              .setMaxLength(60)
+          ),
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("pix_key")
+              .setLabel("Chave Pix")
+              .setPlaceholder("CPF, e-mail, telefone ou chave aleatória")
+              .setStyle(TextInputStyle.Short)
+              .setRequired(true)
+              .setMaxLength(200)
+          )
+        );
+
+        return interaction.showModal(modal);
+      }
 
       /* CRIAÇÃO DE TICKETS */
       if (action === "ticket_create") {
@@ -2522,7 +2659,7 @@ client.on("interactionCreate", async interaction => {
         }
 
         // PIX é enviado como nova mensagem, preservando o painel de confirmação.
-        await interaction.channel.send(paymentMessage(bet)).catch(() => {});
+        await interaction.channel.send(await paymentMessage(bet)).catch(() => {});
 
         if (bet.mediatorId) {
           await interaction.channel.send({
@@ -2732,6 +2869,39 @@ client.on("interactionCreate", async interaction => {
     }
 
     /* ----------------------------------------------------
+       CRIAÇÃO DE TICKETS — MENU EM LISTA
+    ---------------------------------------------------- */
+
+    if (interaction.isStringSelectMenu() && interaction.customId === "ticket_create_select") {
+      const ticketType = interaction.values[0] || "support";
+      const type = TICKET_TYPES[ticketType];
+
+      if (!type) return deny(interaction, "❌ Tipo de ticket inválido.");
+
+      try {
+        const result = await createTicketChannel(interaction, ticketType);
+
+        if (result.existing) {
+          return interaction.reply({
+            content: `🎫 Você já possui um ticket aberto: ${result.channel}`,
+            flags: MessageFlags.Ephemeral
+          });
+        }
+
+        return interaction.reply({
+          content: `✅ Seu ticket de **${type.label}** foi criado: ${result.channel}`,
+          flags: MessageFlags.Ephemeral
+        });
+      } catch (error) {
+        console.error("❌ Erro ao criar ticket:", error);
+        return deny(
+          interaction,
+          `❌ Não foi possível criar o ticket de **${type.label}**. Configure a categoria correspondente em /config > Canais dos Tickets e confira as permissões do bot.`
+        );
+      }
+    }
+
+    /* ----------------------------------------------------
        PAINEL DE SUPORTE / TICKETS
     ---------------------------------------------------- */
 
@@ -2928,7 +3098,7 @@ client.on("interactionCreate", async interaction => {
                 : null;
 
               const payload = {
-                embeds: [makeEmbed(`🎮 FILA ${setup.format}`, queueDescription(queue))],
+                embeds: [queueEmbed(queue)],
                 components: queueComponents(queue)
               };
 
@@ -3110,55 +3280,66 @@ client.on("interactionCreate", async interaction => {
       }
 
       /* PIX */
-
       if (interaction.customId.startsWith("pix_register|")) {
         if (!(await requireAdmin(interaction))) return;
 
-        const userId =
-          interaction.customId.split("|")[1];
+        const userId = interaction.customId.split("|")[1];
 
-        const name =
-          interaction.fields.getTextInputValue("pix_name").trim();
+        const firstName =
+          interaction.fields.getTextInputValue("pix_first_name").trim();
+
+        const lastName =
+          interaction.fields.getTextInputValue("pix_last_name").trim();
 
         const key =
           interaction.fields.getTextInputValue("pix_key").trim();
 
-        const qr =
-          interaction.fields.getTextInputValue("pix_qr").trim();
+        if (!firstName || !lastName || !key) {
+          return deny(interaction, "❌ Nome, sobrenome e chave Pix são obrigatórios.");
+        }
 
-        if (!validUrl(qr)) {
+        const name = `${firstName} ${lastName}`.replace(/\s+/g, " ").trim();
+
+        let qrPayload;
+        try {
+          qrPayload = buildPixPayload({
+            key,
+            name
+          });
+
+          // Valida a geração antes de salvar o cadastro.
+          await QRCode.toBuffer(qrPayload, {
+            type: "png",
+            width: 320,
+            margin: 2
+          });
+        } catch (error) {
+          console.error("❌ Erro ao gerar QR Code Pix:", error);
           return deny(
             interaction,
-            "❌ A URL do QR Code não é válida."
+            "❌ Não foi possível gerar o QR Code. Confira a chave Pix informada."
           );
         }
 
         db.pix[userId] = {
           name,
           key,
-          qr,
+          qrPayload,
           updatedAt: Date.now()
         };
 
         saveDatabase();
 
-        const e = makeEmbed(
-          "💳 CADASTRO PIX",
-          [
-            "**Cadastro de pagamento salvo.**",
-            "",
-            `👤 **Usuário:** <@${userId}>`,
-            `📝 **Titular:** ${name}`,
-            `🔑 **Chave Pix:** \`${key}\``,
-            "",
-            `🔗 **Link do QR Code:** ${qr}`,
-            "",
-            "✅ Os dados estão prontos para serem usados nas apostas."
-          ].join("\n")
-        );
-
         return interaction.reply({
-          embeds: [e],
+          content: [
+            "✅ **CADASTRO PIX SALVO**",
+            "",
+            `👤 **Titular:** ${name}`,
+            `🔑 **Chave Pix:** \`${key}\``,
+            "📷 **QR Code:** gerado automaticamente.",
+            "",
+            "Os dados já estão prontos para os pagamentos das apostas."
+          ].join("\n"),
           flags: MessageFlags.Ephemeral
         });
       }
@@ -3395,7 +3576,7 @@ client.on("interactionCreate", async interaction => {
             queue.channelId = channel.id;
             queue.guildId = interaction.guild.id;
             let msg = queue.messageId ? await channel.messages.fetch(queue.messageId).catch(() => null) : null;
-            const payload = { embeds: [makeEmbed(`🎮 FILA ${setup.format}`, queueDescription(queue))], components: queueComponents(queue) };
+            const payload = { embeds: [queueEmbed(queue)], components: queueComponents(queue) };
             if (msg) await msg.edit(payload);
             else { msg = await channel.send(payload); queue.messageId = msg.id; }
             published.push(money(value));
@@ -3499,12 +3680,12 @@ client.on("interactionCreate", async interaction => {
 
               if (sentMessage) {
                 await sentMessage.edit({
-                  embeds: [makeEmbed(`🎮 FILA ${setup.format}`, queueDescription(queue))],
+                  embeds: [queueEmbed(queue)],
                   components: queueComponents(queue)
                 });
               } else {
                 sentMessage = await channel.send({
-                  embeds: [makeEmbed(`🎮 FILA ${setup.format}`, queueDescription(queue))],
+                  embeds: [queueEmbed(queue)],
                   components: queueComponents(queue)
                 });
                 queue.messageId = sentMessage.id;
@@ -3618,12 +3799,7 @@ client.on("interactionCreate", async interaction => {
 
       const message =
         await channel.send({
-          embeds: [
-            makeEmbed(
-              `🎮 FILA ${format}`,
-              queueDescription(queue)
-            )
-          ],
+          embeds: [queueEmbed(queue)],
           components: queueComponents(queue)
         });
 
@@ -3674,10 +3850,7 @@ async function refreshQueueMessage(queue, guild) {
 
   await message.edit({
     embeds: [
-      makeEmbed(
-        `🎮 FILA ${queue.format}`,
-        queueDescription(queue)
-      )
+queueEmbed(queue)
     ],
     components: queueComponents(queue)
   }).catch(() => {});
