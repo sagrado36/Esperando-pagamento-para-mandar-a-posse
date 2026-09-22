@@ -14,6 +14,9 @@ VARIÁVEIS DE AMBIENTE:
   CLIENT_ID     = ID da aplicação
   GUILD_ID      = opcional; registra comandos no servidor
 
+  EMOJI_*_ID    = IDs dos emojis personalizados (opcionais).
+                  Ex.: EMOJI_JOIN_ID=123456789012345678
+
 COMANDOS:
   /config
   /fila
@@ -86,6 +89,47 @@ try {
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID || null;
+
+/* ========================================================
+   EMOJIS PERSONALIZADOS
+   Defina os IDs no ambiente para usar emojis do seu servidor.
+   Sem ID, o bot usa emojis normais automaticamente.
+======================================================== */
+const EMOJIS = {
+  logo: process.env.EMOJI_LOGO_ID,
+  join: process.env.EMOJI_JOIN_ID,
+  leave: process.env.EMOJI_LEAVE_ID,
+  ice: process.env.EMOJI_ICE_ID,
+  infinite: process.env.EMOJI_INFINITE_ID,
+  confirm: process.env.EMOJI_CONFIRM_ID,
+  cancel: process.env.EMOJI_CANCEL_ID,
+  ticket: process.env.EMOJI_TICKET_ID,
+  support: process.env.EMOJI_SUPPORT_ID,
+  refund: process.env.EMOJI_REFUND_ID,
+  vacancies: process.env.EMOJI_VACANCIES_ID,
+  event: process.env.EMOJI_EVENT_ID,
+  money: process.env.EMOJI_MONEY_ID,
+  admin: process.env.EMOJI_ADMIN_ID,
+  mediator: process.env.EMOJI_MEDIATOR_ID,
+  game: process.env.EMOJI_GAME_ID,
+  profile: process.env.EMOJI_PROFILE_ID
+};
+
+const FALLBACK_EMOJIS = {
+  logo: "🎮", join: "🎮", leave: "🚪", ice: "🧊", infinite: "♾️",
+  confirm: "✅", cancel: "❌", ticket: "🎫", support: "🛠️",
+  refund: "💰", vacancies: "📋", event: "🎉", money: "💰",
+  admin: "👑", mediator: "⚖️", game: "🎮", profile: "👤"
+};
+
+function emoji(name) {
+  return EMOJIS[name] ? { id: EMOJIS[name] } : FALLBACK_EMOJIS[name] || "•";
+}
+
+function emojiText(name) {
+  if (EMOJIS[name]) return `<:e_${name}:${EMOJIS[name]}>`;
+  return FALLBACK_EMOJIS[name] || "•";
+}
 
 if (!TOKEN) {
   console.error("❌ DISCORD_TOKEN não configurado.");
@@ -445,7 +489,7 @@ function makeEmbed(title, description = "") {
     .setColor(db.config.embedColor || "#5865F2")
     .setTitle(title)
     .setDescription(String(description).trim())
-    .setFooter({ text: "🎮 Sistema de Apostas" });
+    .setFooter({ text: "Sistema de Apostas • atendimento rápido" });
 
   if (db.config.profileImage && validUrl(db.config.profileImage)) {
     result.setThumbnail(db.config.profileImage);
@@ -586,39 +630,41 @@ async function playerSelectOptions(guild, players, emoji) {
 function queueDescription(queue) {
   const total = requiredPlayers(queue.format);
   const filled = queue.players.length;
+  const remaining = Math.max(total - filled, 0);
   const playersText = filled
-    ? queue.players.map((id, index) => `${index + 1}. <@${id}>`).join("\\n")
-    : "Nenhum jogador na fila.";
+    ? queue.players.map((id, index) => `${index + 1}. <@${id}>`).join("\n")
+    : "Aguardando jogadores...";
 
   return [
-    "**Jogadores**",
-    playersText
-  ].join("\\n");
+    `**Jogadores ${filled}/${total}**`,
+    playersText,
+    "",
+    remaining > 0 ? `⏳ Falta **${remaining}** jogador.` : "🟢 **Fila completa!**"
+  ].join("\n");
 }
 
 function queueEmbed(queue) {
-  // Visual das filas seguindo o modelo do anexo:
-  // título com formato + modalidade + valor e barra lateral vermelha.
   return new EmbedBuilder()
     .setColor("#ED1C24")
-    .setTitle(`${queue.format} ${modalityName(queue.modality)} | ${money(queue.value)}`)
-    .setDescription(queueDescription(queue));
+    .setTitle(`${formatName(queue.format)} ${modalityName(queue.modality)} • ${money(queue.value)}`)
+    .setDescription(queueDescription(queue))
+    .setFooter({ text: "Entre, aguarde seu adversário e boa partida!" });
 }
 
 function queueComponents(queue) {
   if (queue.format === "1x1") {
     return [
       new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`queue_join|${queue.id}|gelo_normal`).setLabel("Gelo Normal").setEmoji("🧊").setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId(`queue_join|${queue.id}|gelo_infinito`).setLabel("Gelo Infinito").setEmoji("♾️").setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId(`queue_leave|${queue.id}`).setLabel("Sair").setEmoji("🚪").setStyle(ButtonStyle.Danger)
+        new ButtonBuilder().setCustomId(`queue_join|${queue.id}|gelo_normal`).setLabel("Gelo Normal").setEmoji(emoji("ice")).setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`queue_join|${queue.id}|gelo_infinito`).setLabel("Gelo Infinito").setEmoji(emoji("infinite")).setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`queue_leave|${queue.id}`).setLabel("Sair").setEmoji(emoji("leave")).setStyle(ButtonStyle.Danger)
       )
     ];
   }
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`queue_join|${queue.id}`).setLabel("Entrar").setEmoji("🎮").setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId(`queue_leave|${queue.id}`).setLabel("Sair").setEmoji("🚪").setStyle(ButtonStyle.Danger)
+      new ButtonBuilder().setCustomId(`queue_join|${queue.id}`).setLabel("Entrar").setEmoji(emoji("game")).setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`queue_leave|${queue.id}`).setLabel("Sair").setEmoji(emoji("leave")).setStyle(ButtonStyle.Danger)
     )
   ];
 }
@@ -626,8 +672,8 @@ function queueComponents(queue) {
 function queueOneVsOneModeComponents(format, modality, value, channelId) {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`publish_queue|${format}|${modality}|${value}|gelo_normal|${channelId}`).setLabel("Gelo Normal").setEmoji("🧊").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(`publish_queue|${format}|${modality}|${value}|gelo_infinito|${channelId}`).setLabel("Gelo Infinito").setEmoji("♾️").setStyle(ButtonStyle.Primary)
+      new ButtonBuilder().setCustomId(`publish_queue|${format}|${modality}|${value}|gelo_normal|${channelId}`).setLabel("Gelo Normal").setEmoji(emoji("ice")).setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`publish_queue|${format}|${modality}|${value}|gelo_infinito|${channelId}`).setLabel("Gelo Infinito").setEmoji(emoji("infinite")).setStyle(ButtonStyle.Primary)
     )
   ];
 }
@@ -654,8 +700,8 @@ function mediatorQueueComponents() {
 function safeMediatorQueueComponents() {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId("mediator_join").setLabel("Entrar").setEmoji("➕").setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId("mediator_leave").setLabel("Sair").setEmoji("🚪").setStyle(ButtonStyle.Danger)
+      new ButtonBuilder().setCustomId("mediator_join").setLabel("Entrar").setEmoji(emoji("join")).setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId("mediator_leave").setLabel("Sair").setEmoji(emoji("leave")).setStyle(ButtonStyle.Danger)
     )
   ];
 }
@@ -691,8 +737,8 @@ function betEmbed(bet) {
 function betButtons(betId) {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`bet_confirm|${betId}`).setLabel("Confirmar").setEmoji("✅").setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId(`bet_cancel|${betId}`).setLabel("Cancelar").setEmoji("❌").setStyle(ButtonStyle.Danger)
+      new ButtonBuilder().setCustomId(`bet_confirm|${betId}`).setLabel("Confirmar").setEmoji(emoji("confirm")).setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`bet_cancel|${betId}`).setLabel("Cancelar").setEmoji(emoji("cancel")).setStyle(ButtonStyle.Danger)
     )
   ];
 }
@@ -807,28 +853,21 @@ async function paymentMessage(bet) {
   if (!entries.length) {
     return {
       content: [
-        "💳 **PAGAMENTO DA APOSTA**",
-        "━━━━━━━━━━━━━━━━━━━━",
-        `💰 **Valor:** ${money(amountToPay)}`,
-        "",
-        "⚠️ **PIX não configurado.**",
-        "Um ADM deve cadastrar o Pix pelo `/painel cadastro`.",
-        "━━━━━━━━━━━━━━━━━━━━"
+        "💳 **PAGAMENTO**",
+        `💰 **${money(amountToPay)}**`,
+        "⚠️ Pix ainda não configurado.",
+        "ADM: use `/painel cadastro`."
       ].join("\n")
     };
   }
 
   const [, pix] = entries[0];
   const lines = [
-    "💳 **PAGAMENTO DA APOSTA**",
-    "━━━━━━━━━━━━━━━━━━━━",
-    `💰 **Valor:** ${money(amountToPay)}`,
-    `👤 **Titular:** ${pix.name}`,
-    `🔑 **Chave PIX:** \`${pix.key}\``,
-    "",
-    "📷 **QR Code Pix:** imagem anexada abaixo.",
-    "📌 **Faça o pagamento e aguarde a orientação do Mediador.**",
-    "━━━━━━━━━━━━━━━━━━━━"
+    "💳 **PAGAMENTO**",
+    `💰 **${money(amountToPay)}**`,
+    `👤 ${pix.name}`,
+    `🔑 \`${pix.key}\``,
+    "📷 QR Code abaixo. Aguarde o Mediador após pagar."
   ];
 
   const result = { content: lines.join("\n") };
@@ -1075,12 +1114,12 @@ function streamerQueueComponents(queue) {
       new ButtonBuilder()
         .setCustomId(`streamer_join|${queue.id}`)
         .setLabel("Entrar na fila")
-        .setEmoji("🎮")
+        .setEmoji(emoji("game"))
         .setStyle(ButtonStyle.Success),
       new ButtonBuilder()
         .setCustomId(`streamer_leave|${queue.id}`)
         .setLabel("Sair da fila")
-        .setEmoji("🚪")
+        .setEmoji(emoji("leave"))
         .setStyle(ButtonStyle.Danger)
     )
   ];
@@ -1272,15 +1311,13 @@ function ticketCreationPanelComponents() {
 }
 
 function ticketCreationPanelEmbed() {
-  return makeEmbed("🎫 CENTRAL DE TICKETS", [
-    "**Escolha o tipo de atendimento que você precisa:**",
+  return makeEmbed("🎫 ATENDIMENTO", [
+    "Escolha uma opção abaixo.",
     "",
-    "🛠️ **Suporte** — Atendimento geral.",
-    "💰 **Reembolso** — Solicitações relacionadas a reembolso.",
-    "📋 **Vagas** — Dúvidas e solicitações sobre vagas.",
-    "🎉 **Receber Evento** — Atendimento para recebimento de eventos.",
+    "🛠️ Suporte  •  💰 Reembolso",
+    "📋 Vagas  •  🎉 Evento",
     "",
-    "Clique no botão correspondente para abrir seu ticket privado."
+    "Seu ticket será privado."
   ].join("\n"));
 }
 
@@ -1300,16 +1337,12 @@ function ticketPanelComponents(ticketId) {
 
 function ticketPanelEmbed(ticket, guild) {
   const type = TICKET_TYPES[ticket.type] || TICKET_TYPES.support;
-  return makeEmbed(`${type.emoji} TICKET DE ${type.label.toUpperCase()}`, [
-    "**Central de atendimento deste ticket.**",
+  return makeEmbed(`${type.emoji} ${type.label.toUpperCase()}`, [
+    `👤 <@${ticket.creatorId}>`,
+    `📌 ${type.label}`,
+    `🟢 ${ticket.status === "open" ? "Em atendimento" : "Finalizado"}`,
     "",
-    `👤 **Criado por:** <@${ticket.creatorId}>`,
-    `🎫 **Ticket:** <#${ticket.channelId}>`,
-    `📌 **Assunto:** ${type.label}`,
-    `🟢 **Status:** ${ticket.status === "open" ? "Em atendimento" : "Finalizado"}`,
-    "",
-    "🛠️ **Ações disponíveis**",
-    "A equipe pode usar `.aux` para abrir o painel, finalizar o ticket ou adicionar um membro."
+    "Use o menu abaixo para gerenciar este ticket."
   ].join("\n"));
 }
 
@@ -1427,13 +1460,13 @@ function configButtons() {
       new ButtonBuilder()
         .setCustomId("config_admins")
         .setLabel("Administradores")
-        .setEmoji("👑")
+        .setEmoji(emoji("admin"))
         .setStyle(ButtonStyle.Primary),
 
       new ButtonBuilder()
         .setCustomId("config_fee")
         .setLabel("Taxa")
-        .setEmoji("💰")
+        .setEmoji(emoji("refund"))
         .setStyle(ButtonStyle.Secondary),
 
       new ButtonBuilder()
@@ -1465,7 +1498,7 @@ function configButtons() {
       new ButtonBuilder()
         .setCustomId("config_mediator_queue")
         .setLabel("Publicar fila de Mediadores")
-        .setEmoji("👨‍⚖️")
+        .setEmoji(emoji("mediator"))
         .setStyle(ButtonStyle.Primary),
 
       new ButtonBuilder()
@@ -1479,7 +1512,7 @@ function configButtons() {
       new ButtonBuilder()
         .setCustomId("config_support_roles")
         .setLabel("Cargos Suporte")
-        .setEmoji("🎫")
+        .setEmoji(emoji("ticket"))
         .setStyle(ButtonStyle.Primary),
 
       new ButtonBuilder()
@@ -1790,15 +1823,10 @@ client.on("messageCreate", async message => {
           makeEmbed(
             "👨‍⚖️ PAINEL DO MEDIADOR",
             [
-              "**Central de controle desta aposta.**",
+              `🎮 ${bet.format} • ${modalityName(bet.modality)}`,
+              `💰 ${money(bet.value)} • 🏆 ${money(bet.value * 2)}`,
               "",
-              `🎮 **Formato:** ${bet.format}`,
-              `📱 **Modalidade:** ${modalityName(bet.modality)}`,
-              `💰 **Valor:** ${money(bet.value)}`,
-              `🏆 **Prêmio:** ${money(bet.value * 2)}`,
-              "",
-              "🛠️ **Ações disponíveis**",
-              "Escolha uma opção no menu abaixo para administrar a partida."
+              "Escolha uma ação no menu abaixo."
             ].join("\n")
           )
         ],
@@ -1813,12 +1841,10 @@ client.on("messageCreate", async message => {
           makeEmbed(
             `📊 ESTATÍSTICAS — ${message.author.username}`,
             [
-              "**DESEMPENHO**",
-              "",
-              `🏆 **Vitórias:** ${stats.wins}`,
-              `💔 **Derrotas:** ${stats.losses}`,
-              `🚫 **Vitórias por W.O.:** ${stats.woWins}`,
-              `🪙 **Coins:** ${stats.coins}`
+              `🏆 Vitórias: **${stats.wins}**`,
+              `💔 Derrotas: **${stats.losses}**`,
+              `🚫 W.O.: **${stats.woWins}**`,
+              `🪙 Coins: **${stats.coins}**`
             ].join("\n")
           )
         ]
@@ -1933,7 +1959,7 @@ client.on("interactionCreate", async interaction => {
               new ButtonBuilder()
                 .setCustomId("pix_open_register")
                 .setLabel("Cadastrar Pix")
-                .setEmoji("💳")
+                .setEmoji(emoji("money"))
                 .setStyle(ButtonStyle.Success)
             )
           ]
@@ -2198,7 +2224,7 @@ client.on("interactionCreate", async interaction => {
               new ButtonBuilder()
                 .setCustomId("admin_add")
                 .setLabel("Cadastrar ADM")
-                .setEmoji("➕")
+                .setEmoji(emoji("join"))
                 .setStyle(ButtonStyle.Success),
 
               new ButtonBuilder()
