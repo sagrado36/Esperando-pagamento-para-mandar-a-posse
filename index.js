@@ -661,6 +661,19 @@ function betButtons(betId) {
   ];
 }
 
+function pixPanelComponents() {
+  return new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId("pix_panel")
+      .setPlaceholder("Selecione uma opção")
+      .addOptions([
+        { label: "Cadastrar Pix", value: "register", emoji: "💳", description: "Cadastre seu próprio Pix. Qualquer usuário pode usar." },
+        { label: "Configurar Pix", value: "configure", emoji: "⚙️", description: "Configurar/editar Pix. Apenas Mediadores." },
+        { label: "Remover Pix", value: "remove", emoji: "🗑️", description: "Remover um cadastro existente. Apenas Mediadores." }
+      ])
+  );
+}
+
 function mediatorPanelComponents(betId) {
   return [
     new ActionRowBuilder().addComponents(
@@ -1707,27 +1720,25 @@ client.on("interactionCreate", async interaction => {
     ---------------------------------------------------- */
 
     if (interaction.isChatInputCommand() && interaction.commandName === "painel" && interaction.options.getSubcommand() === "cadastro") {
-      if (!(await requireAdmin(interaction))) return;
+      if (!(await requireMediator(interaction))) return;
+
       const entries = Object.entries(db.pix || {});
-      const pix = entries.length ? entries[0][1] : null;
-      const embed = makeEmbed("💳 PAINEL DE CADASTRO PIX", [
-        "Configure os dados Pix que serão usados nas apostas.",
+      const lines = entries.length
+        ? entries.map(([userId, pix], index) => `${index + 1}. **${pix.name}** — <@${userId}>`).join("\n")
+        : "_Nenhum usuário possui Pix cadastrado ainda._";
+
+      const embed = makeEmbed("💳 CONFIGURAR PIX", [
+        "**Configurar Pix**",
+        "Apenas Mediadores podem configurar este painel.",
+        "Qualquer usuário pode cadastrar seu próprio Pix pelo menu abaixo.",
         "",
-        `👤 **Titular:** ${pix?.name || "❌ Não configurado"}`,
-        `🔑 **Chave Pix:** ${pix?.key ? `\`${pix.key}\`` : "❌ Não configurada"}`,
-        `🧾 **QR Code:** ${pix?.qr ? "✅ Gerado automaticamente" : "❌ Não configurado"}`
+        "**Pix cadastrados:**",
+        lines
       ].join("\n"));
-      if (pix?.qr && validUrl(pix.qr)) embed.setImage(pix.qr);
+
       return interaction.reply({
         embeds: [embed],
-        components: [
-          new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId("pix_configure").setLabel("Configurar Pix").setEmoji("⚙️").setStyle(ButtonStyle.Success),
-            new ButtonBuilder().setCustomId("pix_edit").setLabel("Editar Pix").setEmoji("✏️").setStyle(ButtonStyle.Primary),
-            new ButtonBuilder().setCustomId("pix_remove").setLabel("Remover Cadastro").setEmoji("🗑️").setStyle(ButtonStyle.Danger)
-          )
-        ],
-        flags: MessageFlags.Ephemeral
+        components: [pixPanelComponents()],
       });
     }
 
@@ -1909,8 +1920,8 @@ client.on("interactionCreate", async interaction => {
 
     if (interaction.isButton()) {
       if (["pix_configure", "pix_edit"].includes(interaction.customId)) {
-        if (!(await requireAdmin(interaction))) return;
-        const current = Object.values(db.pix || {})[0] || {};
+        if (!(await requireMediator(interaction))) return;
+        const current = db.pix?.[interaction.user.id] || {};
         const modal = new ModalBuilder()
           .setCustomId("pix_register_panel")
           .setTitle(interaction.customId === "pix_edit" ? "Editar Pix" : "Configurar Pix");
@@ -1920,19 +1931,42 @@ client.on("interactionCreate", async interaction => {
         );
         return interaction.showModal(modal);
       }
+
+      if (interaction.customId === "pix_cadastrar") {
+        const current = db.pix?.[interaction.user.id] || {};
+        const modal = new ModalBuilder()
+          .setCustomId("pix_register_panel")
+          .setTitle(current.name ? "Editar seu Pix" : "Cadastrar Pix");
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("pix_name").setLabel("Nome do titular").setPlaceholder("Ex.: João da Silva").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(100).setValue(current.name || "")),
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("pix_key").setLabel("Chave Pix").setPlaceholder("CPF, CNPJ, e-mail, telefone ou chave aleatória").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(200).setValue(current.key || ""))
+        );
+        return interaction.showModal(modal);
+      }
+
       if (interaction.customId === "pix_remove") {
-        if (!(await requireAdmin(interaction))) return;
-        db.pix = {};
-        saveDatabase();
-        return interaction.update({
-          embeds: [makeEmbed("💳 CADASTRO PIX", "🗑️ **Cadastro Pix removido com sucesso.**")],
+        if (!(await requireMediator(interaction))) return;
+        const entries = Object.entries(db.pix || {});
+        if (!entries.length) return deny(interaction, "❌ Não há cadastros Pix para remover.");
+
+        const options = entries.slice(0, 25).map(([userId, pix]) => ({
+          label: String(pix.name || "Sem nome").slice(0, 100),
+          value: userId,
+          description: `Usuário: ${userId}`.slice(0, 100),
+          emoji: "💳"
+        }));
+
+        return interaction.reply({
+          content: "🗑️ **Remover Pix**\nSelecione abaixo o usuário que deseja remover:",
           components: [
             new ActionRowBuilder().addComponents(
-              new ButtonBuilder().setCustomId("pix_configure").setLabel("Configurar Pix").setEmoji("⚙️").setStyle(ButtonStyle.Success),
-              new ButtonBuilder().setCustomId("pix_edit").setLabel("Editar Pix").setEmoji("✏️").setStyle(ButtonStyle.Primary).setDisabled(true),
-              new ButtonBuilder().setCustomId("pix_remove").setLabel("Remover Cadastro").setEmoji("🗑️").setStyle(ButtonStyle.Danger).setDisabled(true)
+              new StringSelectMenuBuilder()
+                .setCustomId("pix_remove_select")
+                .setPlaceholder("Selecione um cadastro Pix")
+                .addOptions(options)
             )
-          ]
+          ],
+          flags: MessageFlags.Ephemeral
         });
       }
       if (interaction.customId === "config_back") {
@@ -3490,8 +3524,6 @@ client.on("interactionCreate", async interaction => {
 
       /* PIX CADASTRO PELO PAINEL */
       if (interaction.customId === "pix_register_panel") {
-        if (!(await requireAdmin(interaction))) return;
-
         const name = interaction.fields.getTextInputValue("pix_name").trim();
         const key = interaction.fields.getTextInputValue("pix_key").trim();
 
@@ -3500,13 +3532,12 @@ client.on("interactionCreate", async interaction => {
         }
 
         const qr = createPixQrUrl(name, key);
-        db.pix = {
-          [interaction.user.id]: {
-            name,
-            key,
-            qr,
-            updatedAt: Date.now()
-          }
+        db.pix = db.pix || {};
+        db.pix[interaction.user.id] = {
+          name,
+          key,
+          qr,
+          updatedAt: Date.now()
         };
 
         saveDatabase();
@@ -3841,6 +3872,68 @@ client.on("interactionCreate", async interaction => {
           components: []
         });
       }
+    }
+
+    if (interaction.isStringSelectMenu() && interaction.customId === "pix_panel") {
+      const choice = interaction.values[0];
+
+      if (choice === "register") {
+        const current = db.pix?.[interaction.user.id] || {};
+        const modal = new ModalBuilder()
+          .setCustomId("pix_register_panel")
+          .setTitle(current.name ? "Editar seu Pix" : "Cadastrar Pix");
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("pix_name").setLabel("Nome do titular").setPlaceholder("Ex.: João da Silva").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(100).setValue(current.name || "")),
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("pix_key").setLabel("Chave Pix").setPlaceholder("CPF, CNPJ, e-mail, telefone ou chave aleatória").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(200).setValue(current.key || ""))
+        );
+        return interaction.showModal(modal);
+      }
+
+      if (choice === "configure") {
+        if (!(await requireMediator(interaction))) return;
+        const current = db.pix?.[interaction.user.id] || {};
+        const modal = new ModalBuilder()
+          .setCustomId("pix_register_panel")
+          .setTitle(current.name ? "Editar Pix" : "Configurar Pix");
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("pix_name").setLabel("Nome do titular").setPlaceholder("Ex.: João da Silva").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(100).setValue(current.name || "")),
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("pix_key").setLabel("Chave Pix").setPlaceholder("CPF, CNPJ, e-mail, telefone ou chave aleatória").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(200).setValue(current.key || ""))
+        );
+        return interaction.showModal(modal);
+      }
+
+      if (choice === "remove") {
+        if (!(await requireMediator(interaction))) return;
+        const entries = Object.entries(db.pix || {});
+        if (!entries.length) return deny(interaction, "❌ Não há cadastros Pix para remover.");
+        const options = entries.slice(0, 25).map(([userId, pix]) => ({
+          label: String(pix.name || "Sem nome").slice(0, 100),
+          value: userId,
+          description: `Usuário: ${userId}`.slice(0, 100),
+          emoji: "💳"
+        }));
+        return interaction.reply({
+          content: "🗑️ **Remover Pix**\nSelecione o cadastro que deseja remover:",
+          components: [new ActionRowBuilder().addComponents(
+            new StringSelectMenuBuilder().setCustomId("pix_remove_select").setPlaceholder("Selecione um cadastro Pix").addOptions(options)
+          )],
+          flags: MessageFlags.Ephemeral
+        });
+      }
+    }
+
+    if (interaction.isStringSelectMenu() && interaction.customId === "pix_remove_select") {
+      if (!(await requireMediator(interaction))) return;
+      const userId = interaction.values[0];
+      const pix = db.pix?.[userId];
+      if (!pix) return deny(interaction, "❌ Esse cadastro Pix não existe mais.");
+
+      delete db.pix[userId];
+      saveDatabase();
+      return interaction.update({
+        content: `🗑️ **Cadastro Pix removido.**\n👤 **Titular:** ${pix.name}\n👥 **Usuário:** <@${userId}>`,
+        components: []
+      });
     }
 
     /* ----------------------------------------------------
