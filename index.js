@@ -2975,8 +2975,9 @@ client.on("interactionCreate", async interaction => {
       saveDatabase();
 
       return interaction.update({
-        content: "✅ Cargo configurado.",
-        components: []
+        content: "✅ **Cargo configurado com sucesso.**\n\nVocê pode continuar configurando o restante do bot abaixo.",
+        embeds: [configEmbed()],
+        components: configButtons()
       });
     }
 
@@ -3111,8 +3112,9 @@ client.on("interactionCreate", async interaction => {
 
       saveDatabase();
       return interaction.update({
-        content: "✅ Configuração de canal salva.",
-        components: []
+        content: "✅ **Configuração salva com sucesso.**\n\nVocê pode continuar configurando o restante do bot abaixo.",
+        embeds: [configEmbed()],
+        components: configButtons()
       });
     }
     /* ----------------------------------------------------
