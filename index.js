@@ -556,7 +556,12 @@ function queueOneVsOneModeComponents(format, modality, value, channelId) {
 }
 
 function mediatorQueueEmbed() {
-  return makeEmbed("", "**FILA MEDIADORES**");
+  // Não usamos título vazio: o Discord pode rejeitar embeds com title="".
+  // O visual continua exatamente como a fila atual, com "FILA MEDIADORES" em destaque.
+  return new EmbedBuilder()
+    .setColor(db.config.embedColor || "#5865F2")
+    .setDescription("**FILA MEDIADORES**")
+    .setFooter({ text: "🎮 Sistema de Apostas" });
 }
 
 function mediatorQueueComponents() {
@@ -573,19 +578,57 @@ function safeMediatorQueueComponents() {
 }
 
 async function updateMediatorQueueMessage(guild) {
-  const channel = await getChannel(guild, db.config.mediatorQueueChannelId);
-  if (!channel || !channel.isTextBased()) return;
-  let message = null;
-  if (db.config.mediatorQueueMessageId) {
-    message = await channel.messages.fetch(db.config.mediatorQueueMessageId).catch(() => null);
+  const channelId = db.config.mediatorQueueChannelId;
+  const channel = await getChannel(guild, channelId);
+
+  if (!channel || !channel.isTextBased()) {
+    return { ok: false, error: "O canal da fila de Mediadores não foi encontrado ou não é um canal de texto." };
   }
-  if (!message) {
-    message = await channel.send({ embeds: [mediatorQueueEmbed()], components: safeMediatorQueueComponents() });
-    db.config.mediatorQueueMessageId = message.id;
-  } else {
-    await message.edit({ embeds: [mediatorQueueEmbed()], components: safeMediatorQueueComponents() }).catch(() => {});
+
+  // Garante que o bot consegue publicar a fila antes de tentar criar/editar a mensagem.
+  const me = guild.members.me || await guild.members.fetchMe().catch(() => null);
+  const permissions = me ? channel.permissionsFor(me) : null;
+  if (permissions) {
+    const missing = [];
+    if (!permissions.has(PermissionFlagsBits.ViewChannel)) missing.push("Ver Canal");
+    if (!permissions.has(PermissionFlagsBits.SendMessages)) missing.push("Enviar Mensagens");
+    if (!permissions.has(PermissionFlagsBits.EmbedLinks)) missing.push("Inserir Links");
+    if (!permissions.has(PermissionFlagsBits.UseExternalEmojis)) {
+      // Os botões não dependem de emojis externos, então não bloqueamos a publicação.
+    }
+    if (missing.length) {
+      return { ok: false, error: `O bot não possui: ${missing.join(", ")}.` };
+    }
   }
-  saveDatabase();
+
+  try {
+    let message = null;
+
+    if (db.config.mediatorQueueMessageId) {
+      message = await channel.messages.fetch(db.config.mediatorQueueMessageId).catch(() => null);
+    }
+
+    const payload = {
+      embeds: [mediatorQueueEmbed()],
+      components: safeMediatorQueueComponents()
+    };
+
+    if (message) {
+      await message.edit(payload);
+    } else {
+      message = await channel.send(payload);
+      db.config.mediatorQueueMessageId = message.id;
+    }
+
+    saveDatabase();
+    return { ok: true, message };
+  } catch (error) {
+    console.error("❌ Erro ao publicar/atualizar a fila de Mediadores:", error);
+    return {
+      ok: false,
+      error: error?.message || "erro desconhecido ao publicar a fila de Mediadores."
+    };
+  }
 }
 
 function betEmbed(bet) {
@@ -2152,7 +2195,10 @@ client.on("interactionCreate", async interaction => {
           );
         }
 
-        await updateMediatorQueueMessage(interaction.guild);
+        const result = await updateMediatorQueueMessage(interaction.guild);
+        if (!result.ok) {
+          return deny(interaction, `❌ Não foi possível publicar a Fila de Mediadores.\n\n${result.error}`);
+        }
 
         return interaction.reply({
           content: "✅ Fila de Mediadores publicada/atualizada.",
@@ -3639,7 +3685,10 @@ client.on("interactionCreate", async interaction => {
         }
         if (selected === "config_mediator_queue") {
           if (!db.config.mediatorQueueChannelId) return deny(interaction, "❌ Primeiro configure o canal da fila de Mediadores.");
-          await updateMediatorQueueMessage(interaction.guild);
+          const result = await updateMediatorQueueMessage(interaction.guild);
+          if (!result.ok) {
+            return deny(interaction, `❌ Não foi possível publicar a Fila de Mediadores.\n\n${result.error}`);
+          }
           return interaction.update({ content: "✅ **Fila de Mediadores publicada/atualizada com sucesso.**", components: configButtons(), embeds: [] });
         }
         if (selected === "config_ticket_channels") {
