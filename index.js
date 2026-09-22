@@ -14,6 +14,7 @@ VARIÁVEIS DE AMBIENTE:
 
 COMANDOS:
   /config
+  /painel cadastro
   /fila
   /embeds
   /criar ticket
@@ -122,10 +123,10 @@ function createDefaultDatabase() {
       mediatorQueueChannelId: null,
       betCategoryId: null,
       streamerCategoryId: null,
-      ticketSupportCategoryId: null,
-      ticketRefundCategoryId: null,
-      ticketVacanciesCategoryId: null,
-      ticketEventCategoryId: null,
+      ticketSupportChannelId: null,
+      ticketRefundChannelId: null,
+      ticketVacanciesChannelId: null,
+      ticketEventChannelId: null,
       ticketPanelTitle: "🎫 CENTRAL DE TICKETS",
       ticketPanelDescription: null,
       ticketPanelBanner: null,
@@ -321,7 +322,7 @@ function configEmbed() {
     "",
     "🎫 **Tickets**",
     `Suporte: ${c.supportRoleId ? `<@&${c.supportRoleId}>` : "❌"} • Supervisor: ${c.supervisorRoleId ? `<@&${c.supervisorRoleId}>` : "❌"} • Auxiliar: ${c.auxiliaryRoleId ? `<@&${c.auxiliaryRoleId}>` : "❌"}`,
-    `Categorias: ${[c.ticketSupportCategoryId, c.ticketRefundCategoryId, c.ticketVacanciesCategoryId, c.ticketEventCategoryId].filter(Boolean).length}/4 configuradas`,
+    `Canais configurados: ${[c.ticketSupportChannelId, c.ticketRefundChannelId, c.ticketVacanciesChannelId, c.ticketEventChannelId].filter(Boolean).length}/4`,
     "",
     "💰 **Apostas**",
     `Taxa atual: **${money(c.fee)}** • Categoria: ${c.betCategoryId ? `<#${c.betCategoryId}>` : "❌"} • Categoria Streamer: ${c.streamerCategoryId ? `<#${c.streamerCategoryId}>` : "❌"}`,
@@ -620,7 +621,7 @@ function paymentMessage(bet) {
         `💰 **Valor:** ${money(amountToPay)}`,
         "",
         "⚠️ **PIX não configurado.**",
-        "Um ADM deve cadastrar o Pix em `/cadastro`.",
+        "Um ADM deve configurar o Pix pelo `/painel cadastro`.",
         "━━━━━━━━━━━━━━━━━━━━"
       ].join("\n")
     };
@@ -1025,10 +1026,10 @@ async function finishStreamerMatch(message, match) {
 ======================================================== */
 
 const TICKET_TYPES = {
-  support: { label: "Suporte", emoji: "🛠️", categoryKey: "ticketSupportCategoryId" },
-  refund: { label: "Reembolso", emoji: "💰", categoryKey: "ticketRefundCategoryId" },
-  vacancies: { label: "Vagas", emoji: "📋", categoryKey: "ticketVacanciesCategoryId" },
-  event: { label: "Receber Evento", emoji: "🎉", categoryKey: "ticketEventCategoryId" }
+  support: { label: "Suporte", emoji: "🛠️", channelKey: "ticketSupportChannelId" },
+  refund: { label: "Reembolso", emoji: "💰", channelKey: "ticketRefundChannelId" },
+  vacancies: { label: "Vagas", emoji: "📋", channelKey: "ticketVacanciesChannelId" },
+  event: { label: "Receber Evento", emoji: "🎉", channelKey: "ticketEventChannelId" }
 };
 
 function ticketCreationPanelComponents() {
@@ -1116,14 +1117,20 @@ async function createTicketChannel(interaction, ticketType = "support") {
     existing.status = "closed";
   }
 
-  const configuredCategoryId = db.config[type.categoryKey];
-  const parent = configuredCategoryId
-    ? await guild.channels.fetch(configuredCategoryId).catch(() => null)
+  const configuredChannelId = db.config[type.channelKey];
+  const configuredChannel = configuredChannelId
+    ? await guild.channels.fetch(configuredChannelId).catch(() => null)
     : null;
 
-  if (!parent || parent.type !== ChannelType.GuildCategory) {
-    throw new Error(`A categoria de tickets de ${type.label} ainda não foi configurada no /config.`);
+  if (!configuredChannel || configuredChannel.type !== ChannelType.GuildText) {
+    throw new Error(`O canal de tickets de ${type.label} ainda não foi configurado no /config.`);
   }
+
+  // O canal configurado é o canal de referência/publicação do tipo de ticket.
+  // O ticket privado é criado na mesma categoria desse canal, preservando a privacidade.
+  const parent = configuredChannel.parent && configuredChannel.parent.type === ChannelType.GuildCategory
+    ? configuredChannel.parent
+    : null;
 
   const overwrites = [
     {
@@ -1265,9 +1272,8 @@ function configButtons() {
           { label: "Categoria Streamer", value: "config_streamer_category", emoji: "🎥", description: "Escolha onde as filas de Streamer serão criadas." },
           { label: "Fila de Mediadores", value: "config_mediator_queue", emoji: "👨‍⚖️", description: "Publique ou atualize a fila de Mediadores." },
           { label: "Cargos dos Tickets", value: "config_support_roles", emoji: "🎫", description: "Configure Suporte, Supervisor e Auxiliar." },
-          { label: "Categorias dos Tickets", value: "config_ticket_channels", emoji: "🗂️", description: "Defina a categoria de cada tipo de ticket." },
+          { label: "Canais dos Tickets", value: "config_ticket_channels", emoji: "📢", description: "Defina o canal de cada tipo de ticket." },
           { label: "Configurar painel de Tickets", value: "config_ticket_panel", emoji: "🖼️", description: "Edite título, descrição, banner, thumbnail e cor." },
-          { label: "Painel de Cadastro Pix", value: "config_pix_panel", emoji: "💳", description: "Cadastre nome e chave Pix; o QR Code é gerado automaticamente." },
           { label: "Ver configuração completa", value: "config_view", emoji: "🔎", description: "Veja um resumo de todas as configurações." },
           { label: "Salvar configurações", value: "config_save", emoji: "💾", description: "Salve imediatamente as alterações atuais." }
         ])
@@ -1284,6 +1290,15 @@ async function registerCommands() {
     new SlashCommandBuilder()
       .setName("config")
       .setDescription("Configura o sistema do bot.")
+      .setDefaultMemberPermissions(null),
+
+    new SlashCommandBuilder()
+      .setName("painel")
+      .setDescription("Exibe painéis do sistema.")
+      .addSubcommand(subcommand =>
+        subcommand
+          .setName("cadastro")
+          .setDescription("Exibe o painel de Cadastro Pix."))
       .setDefaultMemberPermissions(null),
 
     new SlashCommandBuilder()
@@ -1619,6 +1634,31 @@ client.on("interactionCreate", async interaction => {
        CHAT INPUT
     ---------------------------------------------------- */
 
+    if (interaction.isChatInputCommand() && interaction.commandName === "painel" && interaction.options.getSubcommand() === "cadastro") {
+      if (!(await requireAdmin(interaction))) return;
+      const entries = Object.entries(db.pix || {});
+      const pix = entries.length ? entries[0][1] : null;
+      const embed = makeEmbed("💳 PAINEL DE CADASTRO PIX", [
+        "Configure os dados Pix que serão usados nas apostas.",
+        "",
+        `👤 **Titular:** ${pix?.name || "❌ Não configurado"}`,
+        `🔑 **Chave Pix:** ${pix?.key ? `\`${pix.key}\`` : "❌ Não configurada"}`,
+        `🧾 **QR Code:** ${pix?.qr ? "✅ Gerado automaticamente" : "❌ Não configurado"}`
+      ].join("\n"));
+      if (pix?.qr && validUrl(pix.qr)) embed.setImage(pix.qr);
+      return interaction.reply({
+        embeds: [embed],
+        components: [
+          new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId("pix_configure").setLabel("Configurar Pix").setEmoji("⚙️").setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId("pix_edit").setLabel("Editar Pix").setEmoji("✏️").setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId("pix_remove").setLabel("Remover Cadastro").setEmoji("🗑️").setStyle(ButtonStyle.Danger)
+          )
+        ],
+        flags: MessageFlags.Ephemeral
+      });
+    }
+
     if (interaction.isChatInputCommand()) {
       /* /config */
       if (interaction.commandName === "config") {
@@ -1796,32 +1836,32 @@ client.on("interactionCreate", async interaction => {
     ---------------------------------------------------- */
 
     if (interaction.isButton()) {
-      if (interaction.customId === "pix_open_register") {
+      if (["pix_configure", "pix_edit"].includes(interaction.customId)) {
         if (!(await requireAdmin(interaction))) return;
+        const current = Object.values(db.pix || {})[0] || {};
         const modal = new ModalBuilder()
           .setCustomId("pix_register_panel")
-          .setTitle("Cadastro Pix");
+          .setTitle(interaction.customId === "pix_edit" ? "Editar Pix" : "Configurar Pix");
         modal.addComponents(
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder()
-              .setCustomId("pix_name")
-              .setLabel("Nome do titular")
-              .setPlaceholder("Ex.: João da Silva")
-              .setStyle(TextInputStyle.Short)
-              .setRequired(true)
-              .setMaxLength(100)
-          ),
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder()
-              .setCustomId("pix_key")
-              .setLabel("Chave Pix")
-              .setPlaceholder("CPF, CNPJ, e-mail, telefone ou chave aleatória")
-              .setStyle(TextInputStyle.Short)
-              .setRequired(true)
-              .setMaxLength(200)
-          )
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("pix_name").setLabel("Nome do titular").setPlaceholder("Ex.: João da Silva").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(100).setValue(current.name || "")),
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("pix_key").setLabel("Chave Pix").setPlaceholder("CPF, CNPJ, e-mail, telefone ou chave aleatória").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(200).setValue(current.key || ""))
         );
         return interaction.showModal(modal);
+      }
+      if (interaction.customId === "pix_remove") {
+        if (!(await requireAdmin(interaction))) return;
+        db.pix = {};
+        saveDatabase();
+        return interaction.update({
+          embeds: [makeEmbed("💳 CADASTRO PIX", "🗑️ **Cadastro Pix removido com sucesso.**")],
+          components: [
+            new ActionRowBuilder().addComponents(
+              new ButtonBuilder().setCustomId("pix_configure").setLabel("Configurar Pix").setEmoji("⚙️").setStyle(ButtonStyle.Success),
+              new ButtonBuilder().setCustomId("pix_edit").setLabel("Editar Pix").setEmoji("✏️").setStyle(ButtonStyle.Primary).setDisabled(true),
+              new ButtonBuilder().setCustomId("pix_remove").setLabel("Remover Cadastro").setEmoji("🗑️").setStyle(ButtonStyle.Danger).setDisabled(true)
+            )
+          ]
+        });
       }
       if (interaction.customId === "config_back") {
         if (!(await requireAdmin(interaction))) return;
@@ -2034,36 +2074,15 @@ client.on("interactionCreate", async interaction => {
 
         return interaction.reply({
           content: [
-            "🗂️ **CANAIS/CATEGORIAS DOS TICKETS**",
+            "📢 **CANAIS DOS TICKETS**",
             "",
-            "Selecione uma **categoria** para cada botão do painel.",
-            "Os tickets de cada opção serão criados dentro da categoria escolhida."
+            "Selecione o **canal** correspondente a cada tipo de atendimento."
           ].join("\n"),
           components: [
-            new ActionRowBuilder().addComponents(
-              new ChannelSelectMenuBuilder()
-                .setCustomId("ticket_category_support")
-                .setPlaceholder("Categoria — Suporte")
-                .setChannelTypes(ChannelType.GuildCategory)
-            ),
-            new ActionRowBuilder().addComponents(
-              new ChannelSelectMenuBuilder()
-                .setCustomId("ticket_category_refund")
-                .setPlaceholder("Categoria — Reembolso")
-                .setChannelTypes(ChannelType.GuildCategory)
-            ),
-            new ActionRowBuilder().addComponents(
-              new ChannelSelectMenuBuilder()
-                .setCustomId("ticket_category_vacancies")
-                .setPlaceholder("Categoria — Vagas")
-                .setChannelTypes(ChannelType.GuildCategory)
-            ),
-            new ActionRowBuilder().addComponents(
-              new ChannelSelectMenuBuilder()
-                .setCustomId("ticket_category_event")
-                .setPlaceholder("Categoria — Receber Evento")
-                .setChannelTypes(ChannelType.GuildCategory)
-            )
+            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("ticket_channel_support").setPlaceholder("Canal — Suporte").setChannelTypes(ChannelType.GuildText)),
+            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("ticket_channel_refund").setPlaceholder("Canal — Reembolso").setChannelTypes(ChannelType.GuildText)),
+            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("ticket_channel_vacancies").setPlaceholder("Canal — Vagas").setChannelTypes(ChannelType.GuildText)),
+            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("ticket_channel_event").setPlaceholder("Canal — Receber Evento").setChannelTypes(ChannelType.GuildText))
           ],
           flags: MessageFlags.Ephemeral
         });
@@ -3077,17 +3096,17 @@ client.on("interactionCreate", async interaction => {
       if (interaction.customId === "streamer_category") {
         db.config.streamerCategoryId = channelId;
       }
-      if (interaction.customId === "ticket_category_support") {
-        db.config.ticketSupportCategoryId = channelId;
+      if (interaction.customId === "ticket_channel_support") {
+        db.config.ticketSupportChannelId = channelId;
       }
-      if (interaction.customId === "ticket_category_refund") {
-        db.config.ticketRefundCategoryId = channelId;
+      if (interaction.customId === "ticket_channel_refund") {
+        db.config.ticketRefundChannelId = channelId;
       }
-      if (interaction.customId === "ticket_category_vacancies") {
-        db.config.ticketVacanciesCategoryId = channelId;
+      if (interaction.customId === "ticket_channel_vacancies") {
+        db.config.ticketVacanciesChannelId = channelId;
       }
-      if (interaction.customId === "ticket_category_event") {
-        db.config.ticketEventCategoryId = channelId;
+      if (interaction.customId === "ticket_channel_event") {
+        db.config.ticketEventChannelId = channelId;
       }
 
       saveDatabase();
@@ -3382,13 +3401,13 @@ client.on("interactionCreate", async interaction => {
         }
 
         const qr = createPixQrUrl(name, key);
-        const userId = interaction.user.id;
-
-        db.pix[userId] = {
-          name,
-          key,
-          qr,
-          updatedAt: Date.now()
+        db.pix = {
+          [interaction.user.id]: {
+            name,
+            key,
+            qr,
+            updatedAt: Date.now()
+          }
         };
 
         saveDatabase();
@@ -3582,33 +3601,12 @@ client.on("interactionCreate", async interaction => {
           return interaction.update({ content: "✅ **Fila de Mediadores publicada/atualizada com sucesso.**", components: configButtons(), embeds: [] });
         }
         if (selected === "config_ticket_channels") {
-          return interaction.update({ content: "🗂️ **CATEGORIAS DOS TICKETS**\n\nEscolha uma categoria para cada tipo. Os tickets serão criados dentro da categoria correspondente.", components: [
-            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("ticket_category_support").setPlaceholder("🛠️ Categoria — Suporte").setChannelTypes(ChannelType.GuildCategory)),
-            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("ticket_category_refund").setPlaceholder("💰 Categoria — Reembolso").setChannelTypes(ChannelType.GuildCategory)),
-            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("ticket_category_vacancies").setPlaceholder("📋 Categoria — Vagas").setChannelTypes(ChannelType.GuildCategory)),
-            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("ticket_category_event").setPlaceholder("🎉 Categoria — Receber Evento").setChannelTypes(ChannelType.GuildCategory))
+          return interaction.update({ content: "📢 **CANAIS DOS TICKETS**\n\nEscolha o canal correspondente a cada tipo de atendimento.", components: [
+            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("ticket_channel_support").setPlaceholder("🛠️ Canal — Suporte").setChannelTypes(ChannelType.GuildText)),
+            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("ticket_channel_refund").setPlaceholder("💰 Canal — Reembolso").setChannelTypes(ChannelType.GuildText)),
+            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("ticket_channel_vacancies").setPlaceholder("📋 Canal — Vagas").setChannelTypes(ChannelType.GuildText)),
+            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("ticket_channel_event").setPlaceholder("🎉 Canal — Receber Evento").setChannelTypes(ChannelType.GuildText))
           ]});
-        }
-        if (selected === "config_pix_panel") {
-          return interaction.update({
-            content: "💳 **PAINEL DE CADASTRO PIX**\n\nUse o botão abaixo para cadastrar os dados Pix. Você só precisa informar o **nome do titular** e a **chave Pix**. O QR Code será gerado automaticamente pelo bot.",
-            components: [
-              new ActionRowBuilder().addComponents(
-                new ButtonBuilder()
-                  .setCustomId("pix_open_register")
-                  .setLabel("Cadastrar Pix")
-                  .setEmoji("💳")
-                  .setStyle(ButtonStyle.Success)
-              ),
-              new ActionRowBuilder().addComponents(
-                new ButtonBuilder()
-                  .setCustomId("config_back")
-                  .setLabel("Voltar ao /config")
-                  .setEmoji("↩️")
-                  .setStyle(ButtonStyle.Secondary)
-              )
-            ]
-          });
         }
         if (selected === "config_ticket_panel") {
           const c = db.config;
