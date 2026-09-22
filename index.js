@@ -6,21 +6,16 @@
 REQUISITOS:
   Node.js 18.17+
   discord.js 14+
-  Node.js 18.17+ / discord.js 14+
-  Modo TURBO: índices O(1), salvamento agrupado, atualização de filas sob demanda e limpeza automática
 
 VARIÁVEIS DE AMBIENTE:
   DISCORD_TOKEN = token do bot
   CLIENT_ID     = ID da aplicação
   GUILD_ID      = opcional; registra comandos no servidor
 
-  EMOJI_*_ID    = IDs dos emojis personalizados (opcionais).
-                  Ex.: EMOJI_JOIN_ID=123456789012345678
-
 COMANDOS:
   /config
   /fila
-  /painel cadastro
+  /cadastro
   /embeds
   /criar ticket
   /fila streamer
@@ -32,8 +27,6 @@ COMANDOS:
 
 REGRAS:
   - Embeds organizadas e autoexplicativas.
-  - QR Code Pix gerado automaticamente a partir da chave Pix.
-  - Pagamentos enviados somente como mensagens normais, sem embed.
   - Taxa configurável entre R$0,01 e R$0,50.
   - Até 20 ADMs cadastrados.
   - Valores de fila: 0,30 / 0,50 / 0,75 / 1 / 2 / 3 / 5 / 7 / 10 / 20 / 50 / 100.
@@ -74,13 +67,6 @@ const {
 
 const fs = require("fs");
 const path = require("path");
-let QRCode = null;
-try {
-  QRCode = require("qrcode");
-} catch {
-  // O bot funciona sem o pacote qrcode. Nesse caso, generateQrBuffer()
-  // usa o gerador externo via fetch como fallback.
-}
 
 /* ========================================================
    AMBIENTE
@@ -89,47 +75,6 @@ try {
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID || null;
-
-/* ========================================================
-   EMOJIS PERSONALIZADOS
-   Defina os IDs no ambiente para usar emojis do seu servidor.
-   Sem ID, o bot usa emojis normais automaticamente.
-======================================================== */
-const EMOJIS = {
-  logo: process.env.EMOJI_LOGO_ID,
-  join: process.env.EMOJI_JOIN_ID,
-  leave: process.env.EMOJI_LEAVE_ID,
-  ice: process.env.EMOJI_ICE_ID,
-  infinite: process.env.EMOJI_INFINITE_ID,
-  confirm: process.env.EMOJI_CONFIRM_ID,
-  cancel: process.env.EMOJI_CANCEL_ID,
-  ticket: process.env.EMOJI_TICKET_ID,
-  support: process.env.EMOJI_SUPPORT_ID,
-  refund: process.env.EMOJI_REFUND_ID,
-  vacancies: process.env.EMOJI_VACANCIES_ID,
-  event: process.env.EMOJI_EVENT_ID,
-  money: process.env.EMOJI_MONEY_ID,
-  admin: process.env.EMOJI_ADMIN_ID,
-  mediator: process.env.EMOJI_MEDIATOR_ID,
-  game: process.env.EMOJI_GAME_ID,
-  profile: process.env.EMOJI_PROFILE_ID
-};
-
-const FALLBACK_EMOJIS = {
-  logo: "🎮", join: "🎮", leave: "🚪", ice: "🧊", infinite: "♾️",
-  confirm: "✅", cancel: "❌", ticket: "🎫", support: "🛠️",
-  refund: "💰", vacancies: "📋", event: "🎉", money: "💰",
-  admin: "👑", mediator: "⚖️", game: "🎮", profile: "👤"
-};
-
-function emoji(name) {
-  return EMOJIS[name] ? { id: EMOJIS[name] } : FALLBACK_EMOJIS[name] || "•";
-}
-
-function emojiText(name) {
-  if (EMOJIS[name]) return `<:e_${name}:${EMOJIS[name]}>`;
-  return FALLBACK_EMOJIS[name] || "•";
-}
 
 if (!TOKEN) {
   console.error("❌ DISCORD_TOKEN não configurado.");
@@ -247,101 +192,10 @@ function mergeDefaults(base, data) {
 
 let db = loadDatabase();
 
-/* ========================================================
-   MODO TURBO / ESCALA
-   - Evita buscas O(n) nas filas, tickets e apostas ativas.
-   - Evita editar mensagens de fila sem necessidade.
-   - Agrupa gravações no disco para não bloquear o event loop.
-   - Limpa registros encerrados antigos para impedir crescimento infinito.
-   - Mantém locks por recurso para evitar corrida quando muitos cliques chegam juntos.
-======================================================== */
-const PERF = {
-  saveDebounceMs: Math.max(1000, Number(process.env.SAVE_DEBOUNCE_MS || 2000)),
-  saveMaxDelayMs: Math.max(3000, Number(process.env.SAVE_MAX_DELAY_MS || 10000)),
-  queueRefreshDebounceMs: Math.max(50, Number(process.env.QUEUE_REFRESH_DEBOUNCE_MS || 250)),
-  cleanupIntervalMs: Math.max(5 * 60 * 1000, Number(process.env.CLEANUP_INTERVAL_MS || 60 * 60 * 1000)),
-  finishedBetRetentionMs: Math.max(60 * 60 * 1000, Number(process.env.FINISHED_BET_RETENTION_MS || 7 * 24 * 60 * 60 * 1000)),
-  closedTicketRetentionMs: Math.max(60 * 60 * 1000, Number(process.env.CLOSED_TICKET_RETENTION_MS || 30 * 24 * 60 * 60 * 1000)),
-  analysisRetentionMs: Math.max(60 * 60 * 1000, Number(process.env.ANALYSIS_RETENTION_MS || 7 * 24 * 60 * 60 * 1000))
-};
-
 // Configurações temporárias do comando /fila por usuário.
 const filaSetup = new Map();
 
-// Índices rápidos: chave -> registro. Eles tornam as verificações de concorrência O(1).
-const indexes = {
-  betByChannel: new Map(),
-  ticketByUser: new Map(),
-  ticketByChannel: new Map(),
-  streamerMatchByChannel: new Map(),
-  queueByUser: new Map(),
-  streamerQueueByUser: new Map(),
-  streamerQueueByStreamer: new Map()
-};
-
-function indexUserKey(guildId, userId) {
-  return `${guildId}:${userId}`;
-}
-
-function rebuildIndexes() {
-  for (const map of Object.values(indexes)) map.clear();
-
-  for (const bet of Object.values(db.bets || {})) {
-    if (bet?.guildId && bet?.channelId && bet.status !== "finished" && bet.status !== "cancelled") {
-      indexes.betByChannel.set(`${bet.guildId}:${bet.channelId}`, bet.id);
-    }
-  }
-
-  for (const ticket of Object.values(db.tickets || {})) {
-    if (ticket?.guildId && ticket?.creatorId && ticket.status === "open") {
-      indexes.ticketByUser.set(indexUserKey(ticket.guildId, ticket.creatorId), ticket.id);
-      if (ticket.channelId) indexes.ticketByChannel.set(`${ticket.guildId}:${ticket.channelId}`, ticket.id);
-    }
-  }
-
-  for (const match of Object.values(db.streamerMatches || {})) {
-    if (match?.guildId && match?.channelId && match.status === "active") {
-      indexes.streamerMatchByChannel.set(`${match.guildId}:${match.channelId}`, match.id);
-    }
-  }
-
-  for (const queue of Object.values(db.queues || {})) {
-    if (!queue?.guildId) continue;
-    for (const userId of queue.players || []) {
-      indexes.queueByUser.set(indexUserKey(queue.guildId, userId), queue.id);
-    }
-  }
-
-  for (const queue of Object.values(db.streamerQueues || {})) {
-    if (!queue?.guildId) continue;
-    indexes.streamerQueueByStreamer.set(indexUserKey(queue.guildId, queue.streamerId), queue.id);
-    for (const userId of queue.players || []) {
-      indexes.streamerQueueByUser.set(indexUserKey(queue.guildId, userId), queue.id);
-    }
-  }
-}
-
-rebuildIndexes();
-
-const resourceLocks = new Map();
-async function withResourceLock(key, task) {
-  const previous = resourceLocks.get(key) || Promise.resolve();
-  let release;
-  const current = new Promise(resolve => { release = resolve; });
-  const queued = previous.catch(() => {}).then(() => current);
-  resourceLocks.set(key, queued);
-
-  await previous.catch(() => {});
-  try {
-    return await task();
-  } finally {
-    release();
-    if (resourceLocks.get(key) === queued) resourceLocks.delete(key);
-  }
-}
-
 let saveTimer = null;
-let saveMaxTimer = null;
 let saveInProgress = false;
 let savePending = false;
 let shutdownStarted = false;
@@ -351,12 +205,8 @@ async function flushDatabase() {
   saveInProgress = true;
   savePending = false;
 
-  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
-  if (saveMaxTimer) { clearTimeout(saveMaxTimer); saveMaxTimer = null; }
-
   try {
-    // O banco continua sendo um snapshot atômico, mas gravações são agrupadas.
-    const data = JSON.stringify(db);
+    const data = JSON.stringify(db, null, 2);
     const tempFile = `${DATA_FILE}.tmp`;
     await fs.promises.writeFile(tempFile, data, "utf8");
     await fs.promises.rename(tempFile, DATA_FILE);
@@ -367,7 +217,12 @@ async function flushDatabase() {
     saveInProgress = false;
 
     if (savePending && !shutdownStarted) {
-      saveDatabase();
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => {
+        flushDatabase().catch(error =>
+          console.error("❌ Erro no salvamento agendado:", error)
+        );
+      }, 500);
     }
   }
 }
@@ -375,37 +230,15 @@ async function flushDatabase() {
 function saveDatabase() {
   savePending = true;
 
-  if (!saveTimer) {
-    saveTimer = setTimeout(() => {
-      flushDatabase().catch(error => console.error("❌ Erro no salvamento agendado:", error));
-    }, PERF.saveDebounceMs);
+  if (saveTimer) {
+    clearTimeout(saveTimer);
   }
 
-  if (!saveMaxTimer) {
-    saveMaxTimer = setTimeout(() => {
-      flushDatabase().catch(error => console.error("❌ Erro no salvamento máximo:", error));
-    }, PERF.saveMaxDelayMs);
-  }
-}
-
-function markQueueMember(queue, userId) {
-  if (queue?.guildId && userId) indexes.queueByUser.set(indexUserKey(queue.guildId, userId), queue.id);
-}
-
-function unmarkQueueMember(queue, userId) {
-  if (!queue?.guildId || !userId) return;
-  const key = indexUserKey(queue.guildId, userId);
-  if (indexes.queueByUser.get(key) === queue.id) indexes.queueByUser.delete(key);
-}
-
-function markStreamerMember(queue, userId) {
-  if (queue?.guildId && userId) indexes.streamerQueueByUser.set(indexUserKey(queue.guildId, userId), queue.id);
-}
-
-function unmarkStreamerMember(queue, userId) {
-  if (!queue?.guildId || !userId) return;
-  const key = indexUserKey(queue.guildId, userId);
-  if (indexes.streamerQueueByUser.get(key) === queue.id) indexes.streamerQueueByUser.delete(key);
+  saveTimer = setTimeout(() => {
+    flushDatabase().catch(error =>
+      console.error("❌ Erro no salvamento agendado:", error)
+    );
+  }, 500);
 }
 
 /* ========================================================
@@ -489,7 +322,7 @@ function makeEmbed(title, description = "") {
     .setColor(db.config.embedColor || "#5865F2")
     .setTitle(title)
     .setDescription(String(description).trim())
-    .setFooter({ text: "Sistema de Apostas • atendimento rápido" });
+    .setFooter({ text: "🎮 Sistema de Apostas" });
 
   if (db.config.profileImage && validUrl(db.config.profileImage)) {
     result.setThumbnail(db.config.profileImage);
@@ -589,8 +422,6 @@ async function requireStreamer(interaction) {
 
 async function getChannel(guild, channelId) {
   if (!channelId) return null;
-  const cached = guild.channels.cache.get(channelId);
-  if (cached) return cached;
   return guild.channels.fetch(channelId).catch(() => null);
 }
 
@@ -632,39 +463,31 @@ function queueDescription(queue) {
   const filled = queue.players.length;
   const remaining = Math.max(total - filled, 0);
   const playersText = filled
-    ? queue.players.map((id, index) => `${index + 1}. <@${id}>`).join("\n")
-    : "Aguardando jogadores...";
+    ? queue.players.map((id, index) => `**${index + 1}.** <@${id}>`).join("\\n")
+    : "_Nenhum jogador._";
 
   return [
-    `**Jogadores ${filled}/${total}**`,
+    `🎮 **${queue.format}** • ${modalityName(queue.modality)} • **${money(queue.value)}**`,
+    `👥 **Jogadores:** ${filled}/${total}`,
     playersText,
-    "",
-    remaining > 0 ? `⏳ Falta **${remaining}** jogador.` : "🟢 **Fila completa!**"
-  ].join("\n");
-}
-
-function queueEmbed(queue) {
-  return new EmbedBuilder()
-    .setColor("#ED1C24")
-    .setTitle(`${formatName(queue.format)} ${modalityName(queue.modality)} • ${money(queue.value)}`)
-    .setDescription(queueDescription(queue))
-    .setFooter({ text: "Entre, aguarde seu adversário e boa partida!" });
+    remaining > 0 ? `⏳ Faltam **${remaining}** jogador${remaining === 1 ? "" : "es"}.` : "🟢 **Fila completa!**"
+  ].join("\\n");
 }
 
 function queueComponents(queue) {
   if (queue.format === "1x1") {
     return [
       new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`queue_join|${queue.id}|gelo_normal`).setLabel("Gelo Normal").setEmoji(emoji("ice")).setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId(`queue_join|${queue.id}|gelo_infinito`).setLabel("Gelo Infinito").setEmoji(emoji("infinite")).setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId(`queue_leave|${queue.id}`).setLabel("Sair").setEmoji(emoji("leave")).setStyle(ButtonStyle.Danger)
+        new ButtonBuilder().setCustomId(`queue_join|${queue.id}|gelo_normal`).setLabel("Gelo Normal").setEmoji("🧊").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`queue_join|${queue.id}|gelo_infinito`).setLabel("Gelo Infinito").setEmoji("♾️").setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`queue_leave|${queue.id}`).setLabel("Sair").setEmoji("🚪").setStyle(ButtonStyle.Danger)
       )
     ];
   }
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`queue_join|${queue.id}`).setLabel("Entrar").setEmoji(emoji("game")).setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId(`queue_leave|${queue.id}`).setLabel("Sair").setEmoji(emoji("leave")).setStyle(ButtonStyle.Danger)
+      new ButtonBuilder().setCustomId(`queue_join|${queue.id}`).setLabel("Entrar").setEmoji("🎮").setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`queue_leave|${queue.id}`).setLabel("Sair").setEmoji("🚪").setStyle(ButtonStyle.Danger)
     )
   ];
 }
@@ -672,8 +495,8 @@ function queueComponents(queue) {
 function queueOneVsOneModeComponents(format, modality, value, channelId) {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`publish_queue|${format}|${modality}|${value}|gelo_normal|${channelId}`).setLabel("Gelo Normal").setEmoji(emoji("ice")).setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(`publish_queue|${format}|${modality}|${value}|gelo_infinito|${channelId}`).setLabel("Gelo Infinito").setEmoji(emoji("infinite")).setStyle(ButtonStyle.Primary)
+      new ButtonBuilder().setCustomId(`publish_queue|${format}|${modality}|${value}|gelo_normal|${channelId}`).setLabel("Gelo Normal").setEmoji("🧊").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`publish_queue|${format}|${modality}|${value}|gelo_infinito|${channelId}`).setLabel("Gelo Infinito").setEmoji("♾️").setStyle(ButtonStyle.Primary)
     )
   ];
 }
@@ -700,8 +523,8 @@ function mediatorQueueComponents() {
 function safeMediatorQueueComponents() {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId("mediator_join").setLabel("Entrar").setEmoji(emoji("join")).setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId("mediator_leave").setLabel("Sair").setEmoji(emoji("leave")).setStyle(ButtonStyle.Danger)
+      new ButtonBuilder().setCustomId("mediator_join").setLabel("Entrar").setEmoji("➕").setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId("mediator_leave").setLabel("Sair").setEmoji("🚪").setStyle(ButtonStyle.Danger)
     )
   ];
 }
@@ -737,8 +560,8 @@ function betEmbed(bet) {
 function betButtons(betId) {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`bet_confirm|${betId}`).setLabel("Confirmar").setEmoji(emoji("confirm")).setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId(`bet_cancel|${betId}`).setLabel("Cancelar").setEmoji(emoji("cancel")).setStyle(ButtonStyle.Danger)
+      new ButtonBuilder().setCustomId(`bet_confirm|${betId}`).setLabel("Confirmar").setEmoji("✅").setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`bet_cancel|${betId}`).setLabel("Cancelar").setEmoji("❌").setStyle(ButtonStyle.Danger)
     )
   ];
 }
@@ -757,94 +580,7 @@ function mediatorPanelComponents(betId) {
   ];
 }
 
-function normalizePixText(value, maxLength) {
-  return String(value || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^A-Za-z0-9 .-]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toUpperCase()
-    .slice(0, maxLength);
-}
-
-function pixTlv(id, value) {
-  const text = String(value ?? "");
-  return `${id}${String(text.length).padStart(2, "0")}${text}`;
-}
-
-function crc16Ccitt(text) {
-  let crc = 0xFFFF;
-
-  for (const char of Buffer.from(text, "utf8")) {
-    crc ^= char << 8;
-    for (let i = 0; i < 8; i++) {
-      crc = (crc & 0x8000)
-        ? ((crc << 1) ^ 0x1021) & 0xFFFF
-        : (crc << 1) & 0xFFFF;
-    }
-  }
-
-  return crc.toString(16).toUpperCase().padStart(4, "0");
-}
-
-async function generateQrBuffer(payload) {
-  if (!payload) throw new Error("Payload Pix vazio.");
-
-  // Se o pacote qrcode estiver instalado, usa geração local.
-  if (QRCode) {
-    return QRCode.toBuffer(payload, {
-      type: "png",
-      width: 320,
-      margin: 2
-    });
-  }
-
-  // Fallback para hospedagens que não instalaram o pacote qrcode.
-  // Node.js 18+ já possui fetch nativo.
-  const qrUrl = `https://quickchart.io/qr?size=320&margin=2&text=${encodeURIComponent(payload)}`;
-  const response = await fetch(qrUrl);
-
-  if (!response.ok) {
-    throw new Error(`Falha no gerador de QR Code (${response.status}).`);
-  }
-
-  return Buffer.from(await response.arrayBuffer());
-}
-
-function buildPixPayload({ key, name, city = process.env.PIX_CITY || "GOIANIA" }) {
-  const merchantName = normalizePixText(name, 25) || "PAGAMENTO PIX";
-  const merchantCity = normalizePixText(city, 15) || "GOIANIA";
-  const pixKey = String(key || "").trim();
-
-  if (!pixKey) {
-    throw new Error("Chave Pix não informada.");
-  }
-
-  if (pixKey.length > 77) {
-    throw new Error("A chave Pix excede o limite permitido.");
-  }
-
-  const merchantAccountInfo = [
-    pixTlv("00", "BR.GOV.BCB.PIX"),
-    pixTlv("01", pixKey)
-  ].join("");
-
-  const payloadWithoutCrc = [
-    pixTlv("00", "01"),
-    pixTlv("26", merchantAccountInfo),
-    pixTlv("52", "0000"),
-    pixTlv("53", "986"),
-    pixTlv("58", "BR"),
-    pixTlv("59", merchantName),
-    pixTlv("60", merchantCity),
-    pixTlv("62", pixTlv("05", "***"))
-  ].join("") + "6304";
-
-  return payloadWithoutCrc + crc16Ccitt(payloadWithoutCrc);
-}
-
-async function paymentMessage(bet) {
+function paymentMessage(bet) {
   const entries = bet.mediatorId && db.pix[bet.mediatorId]
     ? [[bet.mediatorId, db.pix[bet.mediatorId]]]
     : Object.entries(db.pix);
@@ -853,48 +589,38 @@ async function paymentMessage(bet) {
   if (!entries.length) {
     return {
       content: [
-        "💳 **PAGAMENTO**",
-        `💰 **${money(amountToPay)}**`,
-        "⚠️ Pix ainda não configurado.",
-        "ADM: use `/painel cadastro`."
+        "💳 **PAGAMENTO DA APOSTA**",
+        "━━━━━━━━━━━━━━━━━━━━",
+        `💰 **Valor:** ${money(amountToPay)}`,
+        "",
+        "⚠️ **PIX não configurado.**",
+        "Um ADM deve cadastrar o Pix em `/cadastro`.",
+        "━━━━━━━━━━━━━━━━━━━━"
       ].join("\n")
     };
   }
 
   const [, pix] = entries[0];
-  const lines = [
-    "💳 **PAGAMENTO**",
-    `💰 **${money(amountToPay)}**`,
-    `👤 ${pix.name}`,
-    `🔑 \`${pix.key}\``,
-    "📷 QR Code abaixo. Aguarde o Mediador após pagar."
-  ];
+  const content = [
+    "💳 **PAGAMENTO DA APOSTA**",
+    "━━━━━━━━━━━━━━━━━━━━",
+    `💰 **Valor:** ${money(amountToPay)}`,
+    `👤 **Titular:** ${pix.name}`,
+    `🔑 **Chave PIX:** \`${pix.key}\``,
+    pix.qr && validUrl(pix.qr)
+      ? `🔗 **Link do QR Code:** ${pix.qr}`
+      : "⚠️ **QR Code não cadastrado.**",
+    "",
+    "📌 **Faça o pagamento e aguarde a orientação do Mediador.**",
+    "━━━━━━━━━━━━━━━━━━━━"
+  ].join("\n");
 
-  const result = { content: lines.join("\n") };
+  const result = { content };
 
-  // O pagamento é SEMPRE uma mensagem normal.
-  // O QR é anexado como imagem, sem embed.
-  if (pix.key) {
-    try {
-      const payload = pix.qrPayload || buildPixPayload({
-        key: pix.key,
-        name: pix.name
-      });
-      const qrBuffer = await generateQrBuffer(payload);
-
-      result.files = [{
-        attachment: qrBuffer,
-        name: "pix-qrcode.png"
-      }];
-    } catch (error) {
-      console.error("❌ Erro ao gerar QR Code Pix:", error);
-      result.content += "\n⚠️ Não foi possível gerar o QR Code automaticamente.";
-    }
-  } else if (pix.qr && validUrl(pix.qr)) {
-    // Compatibilidade com cadastros antigos que ainda possuem URL de QR.
-    result.content += `\n🔗 **QR Code antigo:** ${pix.qr}`;
-  } else {
-    result.content += "\n⚠️ **QR Code não cadastrado.**";
+  // O pagamento fica em mensagem normal. O QR aparece separadamente
+  // apenas como imagem, sem colocar os dados de pagamento em embed.
+  if (pix.qr && validUrl(pix.qr)) {
+    result.embeds = [new EmbedBuilder().setImage(pix.qr).setColor(db.config.embedColor || "#5865F2")];
   }
 
   return result;
@@ -1058,7 +784,6 @@ async function createBetFromQueue(interaction, queue) {
 
   if (!hasMediator) {
     queue.players.unshift(...players);
-    for (const userId of players) markQueueMember(queue, userId);
     delete db.bets[id];
     return null;
   }
@@ -1066,9 +791,6 @@ async function createBetFromQueue(interaction, queue) {
   const channel = await createPrivateBetChannel(interaction.guild, bet);
 
   bet.channelId = channel.id;
-  indexes.betByChannel.set(`${bet.guildId}:${bet.channelId}`, bet.id);
-
-  for (const userId of players) unmarkQueueMember(queue, userId);
 
   await channel.send({
     content: players.map(id => `<@${id}>`).join(" "),
@@ -1114,12 +836,12 @@ function streamerQueueComponents(queue) {
       new ButtonBuilder()
         .setCustomId(`streamer_join|${queue.id}`)
         .setLabel("Entrar na fila")
-        .setEmoji(emoji("game"))
+        .setEmoji("🎮")
         .setStyle(ButtonStyle.Success),
       new ButtonBuilder()
         .setCustomId(`streamer_leave|${queue.id}`)
         .setLabel("Sair da fila")
-        .setEmoji(emoji("leave"))
+        .setEmoji("🚪")
         .setStyle(ButtonStyle.Danger)
     )
   ];
@@ -1216,8 +938,6 @@ async function startNextStreamerMatch(queue, guild) {
   };
 
   db.streamerMatches[matchId] = match;
-  indexes.streamerMatchByChannel.set(`${guild.id}:${channel.id}`, matchId);
-  markStreamerMember(queue, playerId);
   queue.activeMatchId = matchId;
 
   await channel.send({
@@ -1252,7 +972,6 @@ async function finishStreamerMatch(message, match) {
 
   match.status = "finished";
   delete db.streamerMatches[match.id];
-  indexes.streamerMatchByChannel.delete(`${match.guildId}:${match.channelId}`);
   queue.activeMatchId = null;
   saveDatabase();
 
@@ -1289,35 +1008,24 @@ const TICKET_TYPES = {
 function ticketCreationPanelComponents() {
   return [
     new ActionRowBuilder().addComponents(
-      new StringSelectMenuBuilder()
-        .setCustomId("ticket_create_select")
-        .setPlaceholder("Selecione o tipo de atendimento")
-        .addOptions(
-          Object.entries(TICKET_TYPES).map(([value, type]) => ({
-            label: type.label,
-            value,
-            emoji: type.emoji,
-            description: value === "support"
-              ? "Atendimento geral."
-              : value === "refund"
-                ? "Solicitações de reembolso."
-                : value === "vacancies"
-                  ? "Dúvidas e solicitações sobre vagas."
-                  : "Atendimento para recebimento de eventos."
-          }))
-        )
+      new ButtonBuilder().setCustomId("ticket_create|support").setLabel("Suporte").setEmoji("🛠️").setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId("ticket_create|refund").setLabel("Reembolso").setEmoji("💰").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId("ticket_create|vacancies").setLabel("Vagas").setEmoji("📋").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId("ticket_create|event").setLabel("Receber Evento").setEmoji("🎉").setStyle(ButtonStyle.Success)
     )
   ];
 }
 
 function ticketCreationPanelEmbed() {
-  return makeEmbed("🎫 ATENDIMENTO", [
-    "Escolha uma opção abaixo.",
+  return makeEmbed("🎫 CENTRAL DE TICKETS", [
+    "**Escolha o tipo de atendimento que você precisa:**",
     "",
-    "🛠️ Suporte  •  💰 Reembolso",
-    "📋 Vagas  •  🎉 Evento",
+    "🛠️ **Suporte** — Atendimento geral.",
+    "💰 **Reembolso** — Solicitações relacionadas a reembolso.",
+    "📋 **Vagas** — Dúvidas e solicitações sobre vagas.",
+    "🎉 **Receber Evento** — Atendimento para recebimento de eventos.",
     "",
-    "Seu ticket será privado."
+    "Clique no botão correspondente para abrir seu ticket privado."
   ].join("\n"));
 }
 
@@ -1337,12 +1045,16 @@ function ticketPanelComponents(ticketId) {
 
 function ticketPanelEmbed(ticket, guild) {
   const type = TICKET_TYPES[ticket.type] || TICKET_TYPES.support;
-  return makeEmbed(`${type.emoji} ${type.label.toUpperCase()}`, [
-    `👤 <@${ticket.creatorId}>`,
-    `📌 ${type.label}`,
-    `🟢 ${ticket.status === "open" ? "Em atendimento" : "Finalizado"}`,
+  return makeEmbed(`${type.emoji} TICKET DE ${type.label.toUpperCase()}`, [
+    "**Central de atendimento deste ticket.**",
     "",
-    "Use o menu abaixo para gerenciar este ticket."
+    `👤 **Criado por:** <@${ticket.creatorId}>`,
+    `🎫 **Ticket:** <#${ticket.channelId}>`,
+    `📌 **Assunto:** ${type.label}`,
+    `🟢 **Status:** ${ticket.status === "open" ? "Em atendimento" : "Finalizado"}`,
+    "",
+    "🛠️ **Ações disponíveis**",
+    "A equipe pode usar `.aux` para abrir o painel, finalizar o ticket ou adicionar um membro."
   ].join("\n"));
 }
 
@@ -1350,8 +1062,9 @@ async function createTicketChannel(interaction, ticketType = "support") {
   const guild = interaction.guild;
   const type = TICKET_TYPES[ticketType] || TICKET_TYPES.support;
 
-  const existingId = indexes.ticketByUser.get(indexUserKey(guild.id, interaction.user.id));
-  const existing = existingId ? db.tickets?.[existingId] : null;
+  const existing = Object.values(db.tickets || {}).find(
+    ticket => ticket.guildId === guild.id && ticket.creatorId === interaction.user.id && ticket.status === "open"
+  );
 
   if (existing) {
     const existingChannel = await guild.channels.fetch(existing.channelId).catch(() => null);
@@ -1419,8 +1132,6 @@ async function createTicketChannel(interaction, ticketType = "support") {
   };
 
   db.tickets[ticketId] = ticket;
-  indexes.ticketByUser.set(indexUserKey(guild.id, interaction.user.id), ticketId);
-  indexes.ticketByChannel.set(`${guild.id}:${channel.id}`, ticketId);
   saveDatabase();
 
   await channel.send({
@@ -1440,8 +1151,9 @@ async function createTicketChannel(interaction, ticketType = "support") {
 }
 
 function findTicketByChannel(guildId, channelId) {
-  const id = indexes.ticketByChannel.get(`${guildId}:${channelId}`);
-  return id ? db.tickets?.[id] : undefined;
+  return Object.values(db.tickets || {}).find(
+    ticket => ticket.guildId === guildId && ticket.channelId === channelId && ticket.status === "open"
+  );
 }
 
 /* ========================================================
@@ -1460,13 +1172,13 @@ function configButtons() {
       new ButtonBuilder()
         .setCustomId("config_admins")
         .setLabel("Administradores")
-        .setEmoji(emoji("admin"))
+        .setEmoji("👑")
         .setStyle(ButtonStyle.Primary),
 
       new ButtonBuilder()
         .setCustomId("config_fee")
         .setLabel("Taxa")
-        .setEmoji(emoji("refund"))
+        .setEmoji("💰")
         .setStyle(ButtonStyle.Secondary),
 
       new ButtonBuilder()
@@ -1498,7 +1210,7 @@ function configButtons() {
       new ButtonBuilder()
         .setCustomId("config_mediator_queue")
         .setLabel("Publicar fila de Mediadores")
-        .setEmoji(emoji("mediator"))
+        .setEmoji("👨‍⚖️")
         .setStyle(ButtonStyle.Primary),
 
       new ButtonBuilder()
@@ -1512,7 +1224,7 @@ function configButtons() {
       new ButtonBuilder()
         .setCustomId("config_support_roles")
         .setLabel("Cargos Suporte")
-        .setEmoji(emoji("ticket"))
+        .setEmoji("🎫")
         .setStyle(ButtonStyle.Primary),
 
       new ButtonBuilder()
@@ -1562,13 +1274,14 @@ async function registerCommands() {
       ),
 
     new SlashCommandBuilder()
-      .setName("painel")
-      .setDescription("Abre painéis administrativos.")
+      .setName("cadastro")
+      .setDescription("Cadastra os dados Pix de um usuário.")
       .setDefaultMemberPermissions(null)
-      .addSubcommand(subcommand =>
-        subcommand
-          .setName("cadastro")
-          .setDescription("Abre o painel de cadastro Pix.")
+      .addUserOption(option =>
+        option
+          .setName("usuario")
+          .setDescription("Usuário que receberá o cadastro Pix.")
+          .setRequired(true)
       ),
 
     new SlashCommandBuilder()
@@ -1609,7 +1322,6 @@ const client = new Client({
 
 client.once('clientReady', async () => {
   console.log(`✅ Bot online: ${client.user.tag}`);
-  console.log(`⚡ MODO TURBO: save=${PERF.saveDebounceMs}ms/${PERF.saveMaxDelayMs}ms | refresh=${PERF.queueRefreshDebounceMs}ms`);
 
   try {
     await registerCommands();
@@ -1699,8 +1411,12 @@ client.on("messageCreate", async message => {
     const roomMatch = message.content.trim().match(/^(\\d{5,20})\\s+(\\S{1,30})$/);
 
     if (roomMatch) {
-      const betId = indexes.betByChannel.get(`${message.guild.id}:${message.channel.id}`);
-      const bet = betId ? db.bets?.[betId] : null;
+      const bet = Object.values(db.bets || {}).find(
+        item =>
+          item.guildId === message.guild.id &&
+          item.channelId === message.channel.id &&
+          item.status !== "finished"
+      );
 
       if (bet && bet.mediatorId === message.author.id && mediatorCheck({ member: message.member })) {
         const roomId = roomMatch[1];
@@ -1758,8 +1474,12 @@ client.on("messageCreate", async message => {
     }
 
     if (command === ".f") {
-      const matchId = indexes.streamerMatchByChannel.get(`${message.guild.id}:${message.channel.id}`);
-      const match = matchId ? db.streamerMatches?.[matchId] : null;
+      const match = Object.values(db.streamerMatches || {}).find(
+        item =>
+          item.guildId === message.guild.id &&
+          item.channelId === message.channel.id &&
+          item.status === "active"
+      );
 
       if (!match) {
         return message.reply("❌ Este comando só pode ser usado no canal privado de uma aposta com Influencer.");
@@ -1794,8 +1514,12 @@ client.on("messageCreate", async message => {
     }
 
     if (command === ".med") {
-      const betId = indexes.betByChannel.get(`${message.guild.id}:${message.channel.id}`);
-      const bet = betId ? db.bets?.[betId] : null;
+      const bet = Object.values(db.bets).find(
+        item =>
+          item.guildId === message.guild.id &&
+          item.channelId === message.channel.id &&
+          item.status !== "finished"
+      );
 
       if (!bet) {
         return message.reply("❌ Este comando só pode ser usado no canal privado de uma aposta.");
@@ -1823,10 +1547,15 @@ client.on("messageCreate", async message => {
           makeEmbed(
             "👨‍⚖️ PAINEL DO MEDIADOR",
             [
-              `🎮 ${bet.format} • ${modalityName(bet.modality)}`,
-              `💰 ${money(bet.value)} • 🏆 ${money(bet.value * 2)}`,
+              "**Central de controle desta aposta.**",
               "",
-              "Escolha uma ação no menu abaixo."
+              `🎮 **Formato:** ${bet.format}`,
+              `📱 **Modalidade:** ${modalityName(bet.modality)}`,
+              `💰 **Valor:** ${money(bet.value)}`,
+              `🏆 **Prêmio:** ${money(bet.value * 2)}`,
+              "",
+              "🛠️ **Ações disponíveis**",
+              "Escolha uma opção no menu abaixo para administrar a partida."
             ].join("\n")
           )
         ],
@@ -1841,10 +1570,12 @@ client.on("messageCreate", async message => {
           makeEmbed(
             `📊 ESTATÍSTICAS — ${message.author.username}`,
             [
-              `🏆 Vitórias: **${stats.wins}**`,
-              `💔 Derrotas: **${stats.losses}**`,
-              `🚫 W.O.: **${stats.woWins}**`,
-              `🪙 Coins: **${stats.coins}**`
+              "**DESEMPENHO**",
+              "",
+              `🏆 **Vitórias:** ${stats.wins}`,
+              `💔 **Derrotas:** ${stats.losses}`,
+              `🚫 **Vitórias por W.O.:** ${stats.woWins}`,
+              `🪙 **Coins:** ${stats.coins}`
             ].join("\n")
           )
         ]
@@ -1935,35 +1666,45 @@ client.on("interactionCreate", async interaction => {
         return interaction.showModal(modal);
       }
 
-      /* /painel cadastro */
-      if (
-        interaction.commandName === "painel" &&
-        interaction.options.getSubcommand() === "cadastro"
-      ) {
-        if (!(await requireAdmin(interaction))) return;
+      /* /cadastro */
+      if (interaction.commandName === "cadastro") {
+        const user = interaction.options.getUser("usuario");
 
-        return interaction.reply({
-          embeds: [
-            makeEmbed("💳 PAINEL DE CADASTRO PIX", [
-              "**Cadastre os dados que serão usados nos pagamentos das apostas.**",
-              "",
-              "👤 Informe **nome e sobrenome**.",
-              "🔑 Informe a **chave Pix**.",
-              "📷 O **QR Code será gerado automaticamente**.",
-              "",
-              "Clique no botão abaixo para abrir o cadastro."
-            ].join("\n"))
-          ],
-          components: [
-            new ActionRowBuilder().addComponents(
-              new ButtonBuilder()
-                .setCustomId("pix_open_register")
-                .setLabel("Cadastrar Pix")
-                .setEmoji(emoji("money"))
-                .setStyle(ButtonStyle.Success)
-            )
-          ]
-        });
+        const modal = new ModalBuilder()
+          .setCustomId(`pix_register|${user.id}`)
+          .setTitle("Cadastro Pix");
+
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("pix_name")
+              .setLabel("Nome")
+              .setPlaceholder("Nome do titular do Pix")
+              .setStyle(TextInputStyle.Short)
+              .setRequired(true)
+              .setMaxLength(100)
+          ),
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("pix_key")
+              .setLabel("Chave Pix")
+              .setPlaceholder("Digite a chave Pix")
+              .setStyle(TextInputStyle.Short)
+              .setRequired(true)
+              .setMaxLength(200)
+          ),
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("pix_qr")
+              .setLabel("QR Code")
+              .setPlaceholder("URL da imagem do QR Code")
+              .setStyle(TextInputStyle.Short)
+              .setRequired(true)
+              .setMaxLength(500)
+          )
+        );
+
+        return interaction.showModal(modal);
       }
 
       /* /criar ticket */
@@ -2076,47 +1817,6 @@ client.on("interactionCreate", async interaction => {
     if (interaction.isButton()) {
       const [action, ...parts] = interaction.customId.split("|");
 
-      /* ABRIR CADASTRO PIX */
-      if (action === "pix_open_register") {
-        if (!(await requireAdmin(interaction))) return;
-
-        const modal = new ModalBuilder()
-          .setCustomId(`pix_register|${interaction.user.id}`)
-          .setTitle("Cadastro Pix");
-
-        modal.addComponents(
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder()
-              .setCustomId("pix_first_name")
-              .setLabel("Nome")
-              .setPlaceholder("Ex.: João")
-              .setStyle(TextInputStyle.Short)
-              .setRequired(true)
-              .setMaxLength(40)
-          ),
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder()
-              .setCustomId("pix_last_name")
-              .setLabel("Sobrenome")
-              .setPlaceholder("Ex.: Silva")
-              .setStyle(TextInputStyle.Short)
-              .setRequired(true)
-              .setMaxLength(60)
-          ),
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder()
-              .setCustomId("pix_key")
-              .setLabel("Chave Pix")
-              .setPlaceholder("CPF, e-mail, telefone ou chave aleatória")
-              .setStyle(TextInputStyle.Short)
-              .setRequired(true)
-              .setMaxLength(200)
-          )
-        );
-
-        return interaction.showModal(modal);
-      }
-
       /* CRIAÇÃO DE TICKETS */
       if (action === "ticket_create") {
         const ticketType = parts[0] || "support";
@@ -2224,7 +1924,7 @@ client.on("interactionCreate", async interaction => {
               new ButtonBuilder()
                 .setCustomId("admin_add")
                 .setLabel("Cadastrar ADM")
-                .setEmoji(emoji("join"))
+                .setEmoji("➕")
                 .setStyle(ButtonStyle.Success),
 
               new ButtonBuilder()
@@ -2488,8 +2188,10 @@ client.on("interactionCreate", async interaction => {
         if (interaction.user.id === queue.streamerId) return deny(interaction, "❌ O Influencer não pode entrar na própria fila.");
         if (queue.players.includes(interaction.user.id)) return deny(interaction, "❌ Você já está nessa fila.");
 
-        const streamerMembership = indexes.streamerQueueByUser.get(indexUserKey(interaction.guild.id, interaction.user.id));
-        if (streamerMembership && streamerMembership !== queue.id) return deny(interaction, "❌ Você já está em uma fila de Streamer.");
+        const alreadyInStreamerQueue = Object.values(db.streamerQueues).some(
+          q => q.guildId === interaction.guild.id && q.players?.includes(interaction.user.id)
+        );
+        if (alreadyInStreamerQueue) return deny(interaction, "❌ Você já está em uma fila de Streamer.");
 
         const activeMatch = queue.activeMatchId ? db.streamerMatches?.[queue.activeMatchId] : null;
         queue.players.push(interaction.user.id);
@@ -2498,7 +2200,6 @@ client.on("interactionCreate", async interaction => {
           const match = await startNextStreamerMatch(queue, interaction.guild);
           if (!match) {
             queue.players = queue.players.filter(id => id !== interaction.user.id);
-            unmarkStreamerMember(queue, interaction.user.id);
             saveDatabase();
             await refreshStreamerQueueMessage(queue, interaction.guild);
             return interaction.editReply({ content: "❌ Não foi possível iniciar o atendimento agora." });
@@ -2509,12 +2210,9 @@ client.on("interactionCreate", async interaction => {
           });
         }
 
-        markStreamerMember(queue, interaction.user.id);
         saveDatabase();
         await refreshStreamerQueueMessage(queue, interaction.guild);
-        return interaction.editReply({
-          content: `✅ Você entrou na fila. Há **${queue.players.length}** jogador${queue.players.length === 1 ? "" : "es"} aguardando.`
-        });
+        return interaction.deleteReply().catch(() => {});
       }
 
       if (action === "streamer_leave") {
@@ -2522,14 +2220,10 @@ client.on("interactionCreate", async interaction => {
         if (!queue) return deny(interaction, "❌ Esta fila de Streamer não existe.");
 
         queue.players = queue.players.filter(id => id !== interaction.user.id);
-        unmarkStreamerMember(queue, interaction.user.id);
         saveDatabase();
         await refreshStreamerQueueMessage(queue, interaction.guild);
 
-        return interaction.reply({
-          content: "✅ Você saiu da fila de Streamer.",
-          flags: MessageFlags.Ephemeral
-        });
+        return interaction.deferUpdate();
       }
 
       /* FILA */
@@ -2546,8 +2240,14 @@ client.on("interactionCreate", async interaction => {
           return deny(interaction, "❌ Você já está nessa fila.");
         }
 
-        const occupiedQueueId = indexes.queueByUser.get(indexUserKey(interaction.guild.id, interaction.user.id));
-        if (occupiedQueueId && occupiedQueueId !== queue.id) {
+        const occupiedElsewhere = Object.values(db.queues).some(
+          q =>
+            q.guildId === interaction.guild.id &&
+            q.players?.includes(interaction.user.id) &&
+            q.id !== queue.id
+        );
+
+        if (occupiedElsewhere) {
           return deny(
             interaction,
             "❌ Você já está em outra fila. Saia dela primeiro."
@@ -2570,14 +2270,12 @@ client.on("interactionCreate", async interaction => {
         }
 
         queue.players.push(interaction.user.id);
-        markQueueMember(queue, interaction.user.id);
 
         if (
           queue.players.length >= requiredPlayers(queue.format) &&
           db.mediatorQueue.length === 0
         ) {
           queue.players.pop();
-          unmarkQueueMember(queue, interaction.user.id);
           saveDatabase();
           await refreshQueueMessage(queue, interaction.guild);
           return interaction.editReply({
@@ -2603,13 +2301,7 @@ client.on("interactionCreate", async interaction => {
 
         await refreshQueueMessage(queue, interaction.guild);
 
-        await interaction.editReply({
-          content:
-            `✅ Você entrou na fila **${queue.format} ${modalityName(queue.modality)}** por **${money(queue.value)}**.`,
-          components: []
-        });
-
-        return;
+        return interaction.deleteReply().catch(() => {});
       }
 
       if (action === "queue_leave") {
@@ -2621,22 +2313,17 @@ client.on("interactionCreate", async interaction => {
 
         const oldLength = queue.players.length;
 
-        const wasInQueue = queue.players.includes(interaction.user.id);
         queue.players = queue.players.filter(
           id => id !== interaction.user.id
         );
-        if (wasInQueue) unmarkQueueMember(queue, interaction.user.id);
 
         saveDatabase();
         await refreshQueueMessage(queue, interaction.guild);
 
-        return interaction.reply({
-          content:
-            queue.players.length < oldLength
-              ? "✅ Você saiu da fila."
-              : "❌ Você não estava nessa fila.",
-          flags: MessageFlags.Ephemeral
-        });
+        if (queue.players.length < oldLength) {
+          return interaction.deferUpdate().catch(() => {});
+        }
+        return deny(interaction, "❌ Você não estava nessa fila.");
       }
 
       /* FILA MEDIADORES */
@@ -2651,7 +2338,7 @@ client.on("interactionCreate", async interaction => {
         await updateMediatorQueueMessage(interaction.guild);
 
         return interaction.reply({
-          content: "✅ Você entrou na fila de Mediadores.",
+          content: "",
           flags: MessageFlags.Ephemeral
         });
       }
@@ -2673,7 +2360,7 @@ client.on("interactionCreate", async interaction => {
         await updateMediatorQueueMessage(interaction.guild);
 
         return interaction.reply({
-          content: "✅ Você saiu da fila de Mediadores.",
+          content: "",
           flags: MessageFlags.Ephemeral
         });
       }
@@ -2821,7 +2508,7 @@ client.on("interactionCreate", async interaction => {
         }
 
         // PIX é enviado como nova mensagem, preservando o painel de confirmação.
-        await interaction.channel.send(await paymentMessage(bet)).catch(() => {});
+        await interaction.channel.send(paymentMessage(bet)).catch(() => {});
 
         if (bet.mediatorId) {
           await interaction.channel.send({
@@ -2856,7 +2543,6 @@ client.on("interactionCreate", async interaction => {
         }
 
         bet.status = "cancelled";
-        indexes.betByChannel.delete(`${bet.guildId}:${bet.channelId}`);
         saveDatabase();
 
         await interaction.reply(
@@ -2941,7 +2627,6 @@ client.on("interactionCreate", async interaction => {
 
         if (bet.confirmedBy.length < bet.players.length) return deny(interaction, "🔒 Aguarde os 2 jogadores confirmarem.");
         bet.status = "finished";
-        indexes.betByChannel.delete(`${bet.guildId}:${bet.channelId}`);
         saveDatabase();
 
         await interaction.reply({
@@ -3033,39 +2718,6 @@ client.on("interactionCreate", async interaction => {
     }
 
     /* ----------------------------------------------------
-       CRIAÇÃO DE TICKETS — MENU EM LISTA
-    ---------------------------------------------------- */
-
-    if (interaction.isStringSelectMenu() && interaction.customId === "ticket_create_select") {
-      const ticketType = interaction.values[0] || "support";
-      const type = TICKET_TYPES[ticketType];
-
-      if (!type) return deny(interaction, "❌ Tipo de ticket inválido.");
-
-      try {
-        const result = await createTicketChannel(interaction, ticketType);
-
-        if (result.existing) {
-          return interaction.reply({
-            content: `🎫 Você já possui um ticket aberto: ${result.channel}`,
-            flags: MessageFlags.Ephemeral
-          });
-        }
-
-        return interaction.reply({
-          content: `✅ Seu ticket de **${type.label}** foi criado: ${result.channel}`,
-          flags: MessageFlags.Ephemeral
-        });
-      } catch (error) {
-        console.error("❌ Erro ao criar ticket:", error);
-        return deny(
-          interaction,
-          `❌ Não foi possível criar o ticket de **${type.label}**. Configure a categoria correspondente em /config > Canais dos Tickets e confira as permissões do bot.`
-        );
-      }
-    }
-
-    /* ----------------------------------------------------
        PAINEL DE SUPORTE / TICKETS
     ---------------------------------------------------- */
 
@@ -3085,8 +2737,6 @@ client.on("interactionCreate", async interaction => {
         ticket.status = "closed";
         ticket.closedBy = interaction.user.id;
         ticket.closedAt = Date.now();
-        indexes.ticketByUser.delete(indexUserKey(ticket.guildId, ticket.creatorId));
-        indexes.ticketByChannel.delete(`${ticket.guildId}:${ticket.channelId}`);
         saveDatabase();
 
         await interaction.reply({
@@ -3264,7 +2914,7 @@ client.on("interactionCreate", async interaction => {
                 : null;
 
               const payload = {
-                embeds: [queueEmbed(queue)],
+                embeds: [makeEmbed(`🎮 FILA ${setup.format}`, queueDescription(queue))],
                 components: queueComponents(queue)
               };
 
@@ -3374,8 +3024,9 @@ client.on("interactionCreate", async interaction => {
           return deny(interaction, "❌ Informe a descrição ou as regras da fila.");
         }
 
-        const existingId = indexes.streamerQueueByStreamer.get(indexUserKey(interaction.guild.id, interaction.user.id));
-        const existing = existingId ? db.streamerQueues?.[existingId] : null;
+        const existing = Object.values(db.streamerQueues).find(
+          queue => queue.guildId === interaction.guild.id && queue.streamerId === interaction.user.id
+        );
 
         if (existing) {
           return deny(interaction, "❌ Você já possui uma fila de Streamer ativa neste servidor.");
@@ -3403,7 +3054,6 @@ client.on("interactionCreate", async interaction => {
 
         queue.messageId = sent.id;
         db.streamerQueues[queueId] = queue;
-        indexes.streamerQueueByStreamer.set(indexUserKey(queue.guildId, queue.streamerId), queueId);
         saveDatabase();
 
         return interaction.reply({
@@ -3446,62 +3096,55 @@ client.on("interactionCreate", async interaction => {
       }
 
       /* PIX */
+
       if (interaction.customId.startsWith("pix_register|")) {
         if (!(await requireAdmin(interaction))) return;
 
-        const userId = interaction.customId.split("|")[1];
+        const userId =
+          interaction.customId.split("|")[1];
 
-        const firstName =
-          interaction.fields.getTextInputValue("pix_first_name").trim();
-
-        const lastName =
-          interaction.fields.getTextInputValue("pix_last_name").trim();
+        const name =
+          interaction.fields.getTextInputValue("pix_name").trim();
 
         const key =
           interaction.fields.getTextInputValue("pix_key").trim();
 
-        if (!firstName || !lastName || !key) {
-          return deny(interaction, "❌ Nome, sobrenome e chave Pix são obrigatórios.");
-        }
+        const qr =
+          interaction.fields.getTextInputValue("pix_qr").trim();
 
-        const name = `${firstName} ${lastName}`.replace(/\s+/g, " ").trim();
-
-        let qrPayload;
-        try {
-          qrPayload = buildPixPayload({
-            key,
-            name
-          });
-
-          // Valida a geração antes de salvar o cadastro.
-          await generateQrBuffer(qrPayload);
-        } catch (error) {
-          console.error("❌ Erro ao gerar QR Code Pix:", error);
+        if (!validUrl(qr)) {
           return deny(
             interaction,
-            "❌ Não foi possível gerar o QR Code. Confira a chave Pix informada."
+            "❌ A URL do QR Code não é válida."
           );
         }
 
         db.pix[userId] = {
           name,
           key,
-          qrPayload,
+          qr,
           updatedAt: Date.now()
         };
 
         saveDatabase();
 
-        return interaction.reply({
-          content: [
-            "✅ **CADASTRO PIX SALVO**",
+        const e = makeEmbed(
+          "💳 CADASTRO PIX",
+          [
+            "**Cadastro de pagamento salvo.**",
             "",
-            `👤 **Titular:** ${name}`,
+            `👤 **Usuário:** <@${userId}>`,
+            `📝 **Titular:** ${name}`,
             `🔑 **Chave Pix:** \`${key}\``,
-            "📷 **QR Code:** gerado automaticamente.",
             "",
-            "Os dados já estão prontos para os pagamentos das apostas."
-          ].join("\n"),
+            `🔗 **Link do QR Code:** ${qr}`,
+            "",
+            "✅ Os dados estão prontos para serem usados nas apostas."
+          ].join("\n")
+        );
+
+        return interaction.reply({
+          embeds: [e],
           flags: MessageFlags.Ephemeral
         });
       }
@@ -3738,7 +3381,7 @@ client.on("interactionCreate", async interaction => {
             queue.channelId = channel.id;
             queue.guildId = interaction.guild.id;
             let msg = queue.messageId ? await channel.messages.fetch(queue.messageId).catch(() => null) : null;
-            const payload = { embeds: [queueEmbed(queue)], components: queueComponents(queue) };
+            const payload = { embeds: [makeEmbed(`🎮 FILA ${setup.format}`, queueDescription(queue))], components: queueComponents(queue) };
             if (msg) await msg.edit(payload);
             else { msg = await channel.send(payload); queue.messageId = msg.id; }
             published.push(money(value));
@@ -3842,12 +3485,12 @@ client.on("interactionCreate", async interaction => {
 
               if (sentMessage) {
                 await sentMessage.edit({
-                  embeds: [queueEmbed(queue)],
+                  embeds: [makeEmbed(`🎮 FILA ${setup.format}`, queueDescription(queue))],
                   components: queueComponents(queue)
                 });
               } else {
                 sentMessage = await channel.send({
-                  embeds: [queueEmbed(queue)],
+                  embeds: [makeEmbed(`🎮 FILA ${setup.format}`, queueDescription(queue))],
                   components: queueComponents(queue)
                 });
                 queue.messageId = sentMessage.id;
@@ -3961,7 +3604,12 @@ client.on("interactionCreate", async interaction => {
 
       const message =
         await channel.send({
-          embeds: [queueEmbed(queue)],
+          embeds: [
+            makeEmbed(
+              `🎮 FILA ${format}`,
+              queueDescription(queue)
+            )
+          ],
           components: queueComponents(queue)
         });
 
@@ -3993,101 +3641,70 @@ client.on("interactionCreate", async interaction => {
    MANUTENÇÃO DAS FILAS
 ======================================================== */
 
-const queueRefreshState = new Map();
-const streamerRefreshState = new Map();
-
-function scheduleDebouncedRefresh(stateMap, key, task) {
-  let state = stateMap.get(key);
-  if (!state) {
-    state = { timer: null, running: false, pending: false };
-    stateMap.set(key, state);
-  }
-
-  state.pending = true;
-  if (state.timer || state.running) return;
-
-  state.timer = setTimeout(async () => {
-    state.timer = null;
-    if (state.running || !state.pending) return;
-    state.running = true;
-    state.pending = false;
-    try {
-      await task();
-    } catch (error) {
-      console.error("❌ Erro ao atualizar mensagem:", error);
-    } finally {
-      state.running = false;
-      if (state.pending) scheduleDebouncedRefresh(stateMap, key, task);
-      else if (!state.timer) stateMap.delete(key);
-    }
-  }, PERF.queueRefreshDebounceMs);
-}
-
 async function refreshQueueMessage(queue, guild) {
   if (!queue.channelId || !queue.messageId) return;
-  const key = `${guild.id}:${queue.id}`;
-  scheduleDebouncedRefresh(queueRefreshState, key, async () => {
-    const channel = await getChannel(guild, queue.channelId);
-    if (!channel || !channel.isTextBased()) return;
-    const message = await channel.messages.fetch(queue.messageId).catch(() => null);
-    if (!message) return;
-    await message.edit({
-      embeds: [queueEmbed(queue)],
-      components: queueComponents(queue)
-    }).catch(() => {});
-  });
+
+  const channel =
+    await guild.channels
+      .fetch(queue.channelId)
+      .catch(() => null);
+
+  if (!channel || !channel.isTextBased()) return;
+
+  const message =
+    await channel.messages
+      .fetch(queue.messageId)
+      .catch(() => null);
+
+  if (!message) return;
+
+  await message.edit({
+    embeds: [
+      makeEmbed(
+        `🎮 FILA ${queue.format}`,
+        queueDescription(queue)
+      )
+    ],
+    components: queueComponents(queue)
+  }).catch(() => {});
 }
 
-async function refreshStreamerQueueMessage(queue, guild) {
-  if (!queue.channelId || !queue.messageId) return;
-  const key = `${guild.id}:${queue.id}`;
-  scheduleDebouncedRefresh(streamerRefreshState, key, async () => {
-    const channel = await getChannel(guild, queue.channelId);
-    if (!channel || !channel.isTextBased()) return;
-    const message = await channel.messages.fetch(queue.messageId).catch(() => null);
-    if (!message) return;
-    await message.edit({
-      embeds: [streamerQueueEmbed(queue, guild)],
-      components: streamerQueueComponents(queue)
-    }).catch(() => {});
-  });
-}
+let maintenanceRunning = false;
 
-function cleanupExpiredState() {
-  const now = Date.now();
-  let changed = false;
+setInterval(async () => {
+  if (maintenanceRunning) return;
 
-  for (const [id, bet] of Object.entries(db.bets || {})) {
-    const terminal = bet.status === "finished" || bet.status === "cancelled";
-    if (terminal && now - Number(bet.createdAt || now) > PERF.finishedBetRetentionMs) {
-      delete db.bets[id];
-      if (bet.guildId && bet.channelId) indexes.betByChannel.delete(`${bet.guildId}:${bet.channelId}`);
-      changed = true;
+  maintenanceRunning = true;
+
+  try {
+    for (const guild of client.guilds.cache.values()) {
+      for (const queue of Object.values(db.queues)) {
+        if (!queue.channelId) continue;
+        if (queue.guildId && queue.guildId !== guild.id) continue;
+
+        await refreshQueueMessage(queue, guild);
+      }
+
+      if (
+        db.config.mediatorQueueChannelId &&
+        (!db.config.guildId || db.config.guildId === guild.id)
+      ) {
+        await updateMediatorQueueMessage(guild);
+      }
+
+      for (const queue of Object.values(db.streamerQueues || {})) {
+        if (!queue.channelId) continue;
+        if (queue.guildId && queue.guildId !== guild.id) continue;
+
+        await refreshStreamerQueueMessage(queue, guild);
+      }
     }
+  } catch (error) {
+    console.error("❌ Erro na manutenção:", error);
+  } finally {
+    maintenanceRunning = false;
   }
-
-  for (const [id, ticket] of Object.entries(db.tickets || {})) {
-    if (ticket.status === "closed" && now - Number(ticket.closedAt || ticket.createdAt || now) > PERF.closedTicketRetentionMs) {
-      delete db.tickets[id];
-      if (ticket.guildId && ticket.creatorId) indexes.ticketByUser.delete(indexUserKey(ticket.guildId, ticket.creatorId));
-      if (ticket.guildId && ticket.channelId) indexes.ticketByChannel.delete(`${ticket.guildId}:${ticket.channelId}`);
-      changed = true;
-    }
-  }
-
-  for (const [id, analysis] of Object.entries(db.analyses || {})) {
-    if (analysis.status !== "pending" && now - Number(analysis.createdAt || now) > PERF.analysisRetentionMs) {
-      delete db.analyses[id];
-      changed = true;
-    }
-  }
-
-  if (changed) saveDatabase();
-}
-
-// Não percorremos todas as filas a cada poucos minutos.
-// As mensagens são atualizadas somente quando realmente mudam.
-setInterval(cleanupExpiredState, PERF.cleanupIntervalMs).unref?.();
+}, 300000);
 
 /* ========================================================
    SALVAMENTO E ERROS
@@ -4110,10 +3727,6 @@ async function shutdown(signal) {
   if (saveTimer) {
     clearTimeout(saveTimer);
     saveTimer = null;
-  }
-  if (saveMaxTimer) {
-    clearTimeout(saveMaxTimer);
-    saveMaxTimer = null;
   }
 
   savePending = true;
