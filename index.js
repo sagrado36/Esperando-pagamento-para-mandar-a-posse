@@ -485,12 +485,15 @@ function queueTitle(queue) {
 function queueDescription(queue) {
   const total = requiredPlayers(queue.format);
   const filled = queue.players.length;
+  const players = filled === 0
+    ? "Nenhum jogador na fila."
+    : queue.players.map((id, index) => `**${index + 1}.** <@${id}>`).join("\n");
 
   return [
     "**Jogadores**",
-    filled === 0
-      ? "Nenhum jogador na fila."
-      : `**${filled}/${total}** jogadores na fila.`
+    players,
+    "",
+    `**${filled}/${total}**`
   ].join("\n");
 }
 
@@ -498,7 +501,8 @@ function queueEmbed(queue) {
   return new EmbedBuilder()
     .setColor(db.config.embedColor || "#5865F2")
     .setTitle(queueTitle(queue))
-    .setDescription(queueDescription(queue));
+    .setDescription(queueDescription(queue))
+    .setFooter({ text: "🎮 Sistema de Apostas" });
 }
 
 function queueComponents(queue) {
@@ -2311,7 +2315,8 @@ client.on("interactionCreate", async interaction => {
 
       /* FILA */
       if (action === "queue_join") {
-        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        // Responde imediatamente à interação: nada de "o bot está pensando" e nenhum aviso de sucesso.
+        await interaction.deferUpdate();
         const queue = db.queues[parts[0]];
         const selectedMode = parts[1] || null;
 
@@ -2361,10 +2366,10 @@ client.on("interactionCreate", async interaction => {
           queue.players.pop();
           saveDatabase();
           await refreshQueueMessage(queue, interaction.guild);
-          return interaction.editReply({
+          return interaction.followUp({
             content: "❌ Não há Mediador disponível no momento. A aposta não pode ser puxada.",
-            components: []
-          });
+            flags: MessageFlags.Ephemeral
+          }).catch(() => {});
         }
 
         const bet =
@@ -2374,20 +2379,17 @@ client.on("interactionCreate", async interaction => {
 
         saveDatabase();
 
-        if (bet) {
-          return interaction.editReply({
-            content:
-              `🎮 Aposta criada em ${bet.channelId ? `<#${bet.channelId}>` : "canal privado"}.`,
-            flags: MessageFlags.Ephemeral
-          });
-        }
-
+        // Atualiza a fila em qualquer cenário. Quando a aposta é formada, os jogadores
+        // já foram removidos da fila e o painel volta imediatamente ao estado correto.
         await refreshQueueMessage(queue, interaction.guild);
 
-        return interaction.deleteReply().catch(() => {});
+        // Nenhuma mensagem de sucesso é enviada ao jogador.
+        return;
       }
 
       if (action === "queue_leave") {
+        // Responde imediatamente e atualiza somente o painel da fila.
+        await interaction.deferUpdate();
         const queue = db.queues[parts[0]];
 
         if (!queue) {
@@ -2404,9 +2406,13 @@ client.on("interactionCreate", async interaction => {
         await refreshQueueMessage(queue, interaction.guild);
 
         if (queue.players.length < oldLength) {
-          return interaction.deferUpdate().catch(() => {});
+          return;
         }
-        return deny(interaction, "❌ Você não estava nessa fila.");
+        // Erro real continua sendo informado, mas nunca há mensagem para uma saída bem-sucedida.
+        return interaction.followUp({
+          content: "❌ Você não estava nessa fila.",
+          flags: MessageFlags.Ephemeral
+        }).catch(() => {});
       }
 
       /* FILA MEDIADORES */
@@ -3872,12 +3878,7 @@ async function refreshQueueMessage(queue, guild) {
   if (!message) return;
 
   await message.edit({
-    embeds: [
-      makeEmbed(
-        `🎮 FILA ${queue.format}`,
-        queueDescription(queue)
-      )
-    ],
+    embeds: [queueEmbed(queue)],
     components: queueComponents(queue)
   }).catch(() => {});
 }
