@@ -523,7 +523,16 @@ function queueComponents(queue) {
     ];
   }
 
-  if (queue.modality === "misto" && ["2x2", "3x3", "4x4"].includes(queue.format)) {
+  if (queue.modality === "misto" && queue.format === "2x2") {
+    return [
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`queue_join|${queue.id}|1emu`).setLabel("1Emu").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`queue_leave|${queue.id}`).setLabel("Sair da fila").setStyle(ButtonStyle.Danger)
+      )
+    ];
+  }
+
+  if (queue.modality === "misto" && ["3x3", "4x4"].includes(queue.format)) {
     return [
       new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`queue_join|${queue.id}|1emu`).setLabel("1Emu").setStyle(ButtonStyle.Secondary),
@@ -2418,8 +2427,10 @@ client.on("interactionCreate", async interaction => {
 
         const allowedModes = queue.format === "1x1"
           ? ["gelo_normal", "gelo_infinito"]
-          : (queue.modality === "misto" && ["2x2", "3x3"].includes(queue.format))
-            ? ["1emu", "2emu"]
+          : (queue.modality === "misto" && queue.format === "2x2")
+            ? ["1emu"]
+            : (queue.modality === "misto" && ["3x3", "4x4"].includes(queue.format))
+              ? ["1emu", "2emu"]
             : ["normal", "full_ump_xm8"];
 
         if (!allowedModes.includes(selectedMode)) {
@@ -2428,7 +2439,7 @@ client.on("interactionCreate", async interaction => {
 
         // 1x1 e filas de modo único continuam exigindo que os jogadores
         // entrem no mesmo modo. No Misto, cada jogador pode escolher 1Emu ou 2Emu.
-        if (queue.format !== "1x1" && !(queue.modality === "misto" && ["2x2", "3x3"].includes(queue.format))) {
+        if (queue.format !== "1x1" && !(queue.modality === "misto" && ["2x2", "3x3", "4x4"].includes(queue.format))) {
           if (queue.players.length > 0 && queue.mode && queue.mode !== selectedMode) {
             const modeNames = { normal: "Normal", full_ump_xm8: "Full UMP / XM8" };
             return deny(interaction, `❌ Esta fila já está configurada para **${modeNames[queue.mode] || queue.mode}**. Escolha o mesmo modo do primeiro jogador.`);
