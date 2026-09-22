@@ -454,9 +454,10 @@ function getQueue(format, modality, value, mode) {
   if (!db.queues[id]) {
     db.queues[id] = {
       id, format, modality, value: Number(value), mode,
-      players: [], messageId: null, channelId: null
+      players: [], playerModes: {}, messageId: null, channelId: null
     };
   }
+  if (!db.queues[id].playerModes) db.queues[id].playerModes = {};
   return db.queues[id];
 }
 
@@ -483,17 +484,23 @@ function queueTitle(queue) {
 }
 
 function queueDescription(queue) {
-  const total = requiredPlayers(queue.format);
-  const filled = queue.players.length;
-  const players = filled === 0
+  const players = queue.players.length === 0
     ? "Nenhum jogador na fila."
-    : queue.players.map((id, index) => `**${index + 1}.** <@${id}>`).join("\n");
+    : queue.players.map((id, index) => {
+        const mode = queue.playerModes?.[id];
+        const modeText = mode === "gelo_normal" ? " — Gelo Normal"
+          : mode === "gelo_infinito" ? " — Gelo Infinito"
+          : mode === "normal" ? " — Normal"
+          : mode === "full_ump_xm8" ? " — Full UMP / XM8"
+          : mode === "1emu" ? " — 1Emu"
+          : mode === "2emu" ? " — 2Emu"
+          : "";
+        return `**${index + 1}.** <@${id}>${modeText}`;
+      }).join("\n");
 
   return [
     "**Jogadores**",
-    players,
-    "",
-    `**${filled}/${total}**`
+    players
   ].join("\n");
 }
 
@@ -515,12 +522,28 @@ function queueComponents(queue) {
       )
     ];
   }
-  return [
-    new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`queue_join|${queue.id}`).setLabel("Entrar").setEmoji("🎮").setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId(`queue_leave|${queue.id}`).setLabel("Sair").setEmoji("🚪").setStyle(ButtonStyle.Danger)
-    )
-  ];
+
+  if (queue.modality === "misto" && ["2x2", "3x3", "4x4"].includes(queue.format)) {
+    return [
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`queue_join|${queue.id}|1emu`).setLabel("1Emu").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`queue_join|${queue.id}|2emu`).setLabel("2Emu").setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`queue_leave|${queue.id}`).setLabel("Sair da fila").setStyle(ButtonStyle.Danger)
+      )
+    ];
+  }
+
+  if (["2x2", "3x3", "4x4"].includes(queue.format)) {
+    return [
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`queue_join|${queue.id}|normal`).setLabel("Normal").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`queue_join|${queue.id}|full_ump_xm8`).setLabel("Full UMP / XM8").setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`queue_leave|${queue.id}`).setLabel("Sair da fila").setStyle(ButtonStyle.Danger)
+      )
+    ];
+  }
+
+  return [];
 }
 
 function queueOneVsOneModeComponents(format, modality, value, channelId) {
@@ -773,6 +796,7 @@ async function createBetFromQueue(interaction, queue) {
 
   const players = queue.players.splice(0, needed);
   const matchMode = queue.mode;
+  const playerModes = players.map(id => queue.playerModes?.[id] || null);
 
   const id =
     `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -785,6 +809,7 @@ async function createBetFromQueue(interaction, queue) {
     modality: queue.modality,
     value: queue.value,
     mode: matchMode,
+    playerModes,
     players,
     mediatorId: null,
     confirmedBy: [],
@@ -796,7 +821,10 @@ async function createBetFromQueue(interaction, queue) {
     createdAt: Date.now()
   };
 
-  if (queue.format === "1x1") queue.mode = "choice";
+  if (queue.playerModes) {
+    for (const playerId of players) delete queue.playerModes[playerId];
+  }
+  if (queue.players.length === 0) queue.mode = queue.format === "1x1" ? "choice" : null;
 
   db.bets[id] = bet;
 
@@ -2342,28 +2370,44 @@ client.on("interactionCreate", async interaction => {
           );
         }
 
-        if (queue.format === "1x1") {
-          if (!["gelo_normal", "gelo_infinito"].includes(selectedMode)) {
-            return deny(interaction, "❌ Escolha Gelo Normal ou Gelo Infinito.");
-          }
+        const allowedModes = queue.format === "1x1"
+          ? ["gelo_normal", "gelo_infinito"]
+          : (queue.modality === "misto" && ["2x2", "3x3"].includes(queue.format))
+            ? ["1emu", "2emu"]
+            : ["normal", "full_ump_xm8"];
 
+        if (!allowedModes.includes(selectedMode)) {
+          return deny(interaction, "❌ Selecione uma das opções disponíveis na fila.");
+        }
+
+        // 1x1 e filas de modo único continuam exigindo que os jogadores
+        // entrem no mesmo modo. No Misto, cada jogador pode escolher 1Emu ou 2Emu.
+        if (queue.format !== "1x1" && !(queue.modality === "misto" && ["2x2", "3x3"].includes(queue.format))) {
+          if (queue.players.length > 0 && queue.mode && queue.mode !== selectedMode) {
+            const modeNames = { normal: "Normal", full_ump_xm8: "Full UMP / XM8" };
+            return deny(interaction, `❌ Esta fila já está configurada para **${modeNames[queue.mode] || queue.mode}**. Escolha o mesmo modo do primeiro jogador.`);
+          }
+          queue.mode = selectedMode;
+        } else if (queue.format === "1x1") {
           if (queue.players.length > 0 && queue.mode !== selectedMode) {
             return deny(
               interaction,
               `❌ Esta fila já está configurada para **${queue.mode === "gelo_infinito" ? "Gelo Infinito" : "Gelo Normal"}**. Escolha o mesmo modo do primeiro jogador.`
             );
           }
-
           queue.mode = selectedMode;
         }
 
+        queue.playerModes = queue.playerModes || {};
+        queue.playerModes[interaction.user.id] = selectedMode;
         queue.players.push(interaction.user.id);
 
         if (
           queue.players.length >= requiredPlayers(queue.format) &&
           db.mediatorQueue.length === 0
         ) {
-          queue.players.pop();
+          const removedPlayer = queue.players.pop();
+          if (queue.playerModes) delete queue.playerModes[removedPlayer];
           saveDatabase();
           await refreshQueueMessage(queue, interaction.guild);
           return interaction.followUp({
@@ -2401,6 +2445,8 @@ client.on("interactionCreate", async interaction => {
         queue.players = queue.players.filter(
           id => id !== interaction.user.id
         );
+        if (queue.playerModes) delete queue.playerModes[interaction.user.id];
+        if (queue.players.length === 0) queue.mode = queue.format === "1x1" ? "choice" : null;
 
         saveDatabase();
         await refreshQueueMessage(queue, interaction.guild);
