@@ -6,7 +6,7 @@
 REQUISITOS:
   Node.js 18.17+
   discord.js 14+
-  qrcode (npm install qrcode)
+  Nenhuma dependência extra para QR Code (usa qrcode se instalado; caso contrário usa geração automática via QuickChart)
 
 VARIÁVEIS DE AMBIENTE:
   DISCORD_TOKEN = token do bot
@@ -70,7 +70,13 @@ const {
 
 const fs = require("fs");
 const path = require("path");
-const QRCode = require("qrcode");
+let QRCode = null;
+try {
+  QRCode = require("qrcode");
+} catch {
+  // O bot funciona sem o pacote qrcode. Nesse caso, generateQrBuffer()
+  // usa o gerador externo via fetch como fallback.
+}
 
 /* ========================================================
    AMBIENTE
@@ -621,6 +627,30 @@ function crc16Ccitt(text) {
   return crc.toString(16).toUpperCase().padStart(4, "0");
 }
 
+async function generateQrBuffer(payload) {
+  if (!payload) throw new Error("Payload Pix vazio.");
+
+  // Se o pacote qrcode estiver instalado, usa geração local.
+  if (QRCode) {
+    return QRCode.toBuffer(payload, {
+      type: "png",
+      width: 320,
+      margin: 2
+    });
+  }
+
+  // Fallback para hospedagens que não instalaram o pacote qrcode.
+  // Node.js 18+ já possui fetch nativo.
+  const qrUrl = `https://quickchart.io/qr?size=320&margin=2&text=${encodeURIComponent(payload)}`;
+  const response = await fetch(qrUrl);
+
+  if (!response.ok) {
+    throw new Error(`Falha no gerador de QR Code (${response.status}).`);
+  }
+
+  return Buffer.from(await response.arrayBuffer());
+}
+
 function buildPixPayload({ key, name, city = process.env.PIX_CITY || "GOIANIA" }) {
   const merchantName = normalizePixText(name, 25) || "PAGAMENTO PIX";
   const merchantCity = normalizePixText(city, 15) || "GOIANIA";
@@ -696,11 +726,7 @@ async function paymentMessage(bet) {
         key: pix.key,
         name: pix.name
       });
-      const qrBuffer = await QRCode.toBuffer(payload, {
-        type: "png",
-        width: 320,
-        margin: 2
-      });
+      const qrBuffer = await generateQrBuffer(payload);
 
       result.files = [{
         attachment: qrBuffer,
@@ -3308,11 +3334,7 @@ client.on("interactionCreate", async interaction => {
           });
 
           // Valida a geração antes de salvar o cadastro.
-          await QRCode.toBuffer(qrPayload, {
-            type: "png",
-            width: 320,
-            margin: 2
-          });
+          await generateQrBuffer(qrPayload);
         } catch (error) {
           console.error("❌ Erro ao gerar QR Code Pix:", error);
           return deny(
@@ -3949,3 +3971,4 @@ client.login(TOKEN).catch(error => {
   console.error("❌ Não foi possível iniciar o bot:", error);
   process.exit(1);
 });
+
