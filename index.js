@@ -15,7 +15,6 @@ VARIÁVEIS DE AMBIENTE:
 COMANDOS:
   /config
   /fila
-  /cadastro
   /embeds
   /criar ticket
   /fila streamer
@@ -131,8 +130,8 @@ function createDefaultDatabase() {
       ticketPanelDescription: null,
       ticketPanelBanner: null,
       ticketPanelThumbnail: null,
-      ticketPanelFooter: "🎮 Sistema de Apostas",
       ticketPanelColor: null,
+      ticketPanelFooter: "🎮 Sistema de Apostas",
       mediatorQueueMessageId: null
     },
 
@@ -311,47 +310,30 @@ function userStats(userId) {
 
 function configEmbed() {
   const c = db.config;
+
   return makeEmbed("⚙️ CONFIGURAÇÃO DO BOT", [
-    "Use a lista abaixo para escolher exatamente o que deseja configurar.",
-    "Cada opção explica de forma simples o que será alterado.",
+    "**Central de configuração**",
+    "Use o menu abaixo para escolher uma área. Cada opção explica exatamente o que será configurado.",
     "",
-    "👥 **CARGOS DO SISTEMA**",
-    `Mediador: ${c.mediatorRoleId ? `<@&${c.mediatorRoleId}>` : "❌ Não configurado"}`,
-    `Analista: ${c.analystRoleId ? `<@&${c.analystRoleId}>` : "❌ Não configurado"}`,
-    `Influencer/Streamer: ${c.streamerRoleId ? `<@&${c.streamerRoleId}>` : "❌ Não configurado"}`,
+    "👥 **Equipe e permissões**",
+    `Mediador: ${c.mediatorRoleId ? `<@&${c.mediatorRoleId}>` : "❌ Não configurado"} • Analista: ${c.analystRoleId ? `<@&${c.analystRoleId}>` : "❌ Não configurado"}`,
+    `Streamer: ${c.streamerRoleId ? `<@&${c.streamerRoleId}>` : "❌ Não configurado"} • Administradores: **${c.admins.length}/20**`,
     "",
-    "🎫 **EQUIPE DOS TICKETS**",
-    `Suporte: ${c.supportRoleId ? `<@&${c.supportRoleId}>` : "❌ Não configurado"}`,
-    `Supervisor: ${c.supervisorRoleId ? `<@&${c.supervisorRoleId}>` : "❌ Não configurado"}`,
-    `Auxiliar: ${c.auxiliaryRoleId ? `<@&${c.auxiliaryRoleId}>` : "❌ Não configurado"}`,
+    "🎫 **Tickets**",
+    `Suporte: ${c.supportRoleId ? `<@&${c.supportRoleId}>` : "❌"} • Supervisor: ${c.supervisorRoleId ? `<@&${c.supervisorRoleId}>` : "❌"} • Auxiliar: ${c.auxiliaryRoleId ? `<@&${c.auxiliaryRoleId}>` : "❌"}`,
+    `Categorias: ${[c.ticketSupportCategoryId, c.ticketRefundCategoryId, c.ticketVacanciesCategoryId, c.ticketEventCategoryId].filter(Boolean).length}/4 configuradas`,
     "",
-    "💰 **APOSTAS E CANAIS**",
-    `Taxa: **${money(c.fee)}**`,
-    `Categoria das apostas: ${c.betCategoryId ? `<#${c.betCategoryId}>` : "❌ Não configurada"}`,
-    `Categoria Streamer: ${c.streamerCategoryId ? `<#${c.streamerCategoryId}>` : "❌ Não configurada"}`,
-    `Fila de Mediadores: ${c.mediatorQueueChannelId ? `<#${c.mediatorQueueChannelId}>` : "❌ Não configurada"}`,
+    "💰 **Apostas**",
+    `Taxa atual: **${money(c.fee)}** • Categoria: ${c.betCategoryId ? `<#${c.betCategoryId}>` : "❌"} • Categoria Streamer: ${c.streamerCategoryId ? `<#${c.streamerCategoryId}>` : "❌"}`,
+    `Canais de análise: ${c.ssmobChannelId ? `<#${c.ssmobChannelId}>` : "❌"} • ${c.ssemuChannelId ? `<#${c.ssemuChannelId}>` : "❌"}`,
+    `Fila de Mediadores: ${c.mediatorQueueChannelId ? `<#${c.mediatorQueueChannelId}>` : "❌"}`,
     "",
-    "📢 **CANAIS DE SOLICITAÇÕES**",
-    `.ssmob: ${c.ssmobChannelId ? `<#${c.ssmobChannelId}>` : "❌ Não configurado"}`,
-    `.ssemu: ${c.ssemuChannelId ? `<#${c.ssemuChannelId}>` : "❌ Não configurado"}`,
+    "🎨 **Aparência**",
+    `Cor: \`${c.embedColor}\` • Foto padrão: ${c.profileImage ? "✅ Configurada" : "❌ Não configurada"}`,
+    `Painel de tickets: **${c.ticketPanelTitle || "🎫 CENTRAL DE TICKETS"}**`,
     "",
-    "🎫 **CATEGORIAS DOS TICKETS**",
-    `Suporte: ${c.ticketSupportCategoryId ? `<#${c.ticketSupportCategoryId}>` : "❌ Não configurada"}`,
-    `Reembolso: ${c.ticketRefundCategoryId ? `<#${c.ticketRefundCategoryId}>` : "❌ Não configurada"}`,
-    `Vagas: ${c.ticketVacanciesCategoryId ? `<#${c.ticketVacanciesCategoryId}>` : "❌ Não configurada"}`,
-    `Receber Evento: ${c.ticketEventCategoryId ? `<#${c.ticketEventCategoryId}>` : "❌ Não configurada"}`,
-    "",
-    "🖼️ **PAINEL DE TICKETS**",
-    `Banner: ${c.ticketPanelBanner ? "✅ Configurado" : "❌ Não configurado"}`,
-    `Thumbnail: ${c.ticketPanelThumbnail ? "✅ Configurado" : "❌ Não configurado"}`,
-    `Cor: \`${c.ticketPanelColor || c.embedColor}\``,
-    "",
-    "🎨 **APARÊNCIA GERAL**",
-    `Cor das embeds: \`${c.embedColor}\``,
-    `Foto do bot: ${c.profileImage ? "✅ Configurada" : "❌ Não configurada"}`,
-    "",
-    `👑 **Administradores:** ${c.admins.length}/20`
-  ].join("\\n"));
+    "👇 **Escolha uma opção no menu para configurar o sistema.**"
+  ].join("\n"));
 }
 
 function makeEmbed(title, description = "") {
@@ -495,21 +477,27 @@ async function playerSelectOptions(guild, players, emoji) {
   }));
 }
 
+function queueTitle(queue) {
+  return `${String(queue.format).replace("x", "v")} ${modalityName(queue.modality)} | ${money(queue.value)}`;
+}
+
 function queueDescription(queue) {
   const total = requiredPlayers(queue.format);
   const filled = queue.players.length;
 
-  // Visual da fila seguindo o modelo enviado:
-  // primeira linha = formato + modalidade + valor
-  // abaixo = somente o status/quantidade de jogadores.
   return [
-    `**${queue.format} ${modalityName(queue.modality)} | ${money(queue.value)}**`,
-    "",
     "**Jogadores**",
-    filled
-      ? `${filled}/${total} jogador${filled === 1 ? "" : "es"} na fila.`
-      : "Nenhum jogador na fila."
-  ].join("\\n");
+    filled === 0
+      ? "Nenhum jogador na fila."
+      : `**${filled}/${total}** jogadores na fila.`
+  ].join("\n");
+}
+
+function queueEmbed(queue) {
+  return new EmbedBuilder()
+    .setColor(db.config.embedColor || "#5865F2")
+    .setTitle(queueTitle(queue))
+    .setDescription(queueDescription(queue));
 }
 
 function queueComponents(queue) {
@@ -1050,30 +1038,10 @@ function ticketCreationPanelComponents() {
         .setCustomId("ticket_create_menu")
         .setPlaceholder("🎫 Selecione o tipo de atendimento")
         .addOptions([
-          {
-            label: "Suporte",
-            value: "support",
-            emoji: "🛠️",
-            description: "Abra um atendimento geral com a equipe."
-          },
-          {
-            label: "Reembolso",
-            value: "refund",
-            emoji: "💰",
-            description: "Solicite atendimento sobre reembolso."
-          },
-          {
-            label: "Vagas",
-            value: "vacancies",
-            emoji: "📋",
-            description: "Tire dúvidas ou solicite informações sobre vagas."
-          },
-          {
-            label: "Receber Evento",
-            value: "event",
-            emoji: "🎉",
-            description: "Abra um atendimento para receber um evento."
-          }
+          { label: "Suporte", value: "support", emoji: "🛠️", description: "Atendimento geral e suporte." },
+          { label: "Reembolso", value: "refund", emoji: "💰", description: "Solicitações relacionadas a reembolso." },
+          { label: "Vagas", value: "vacancies", emoji: "📋", description: "Dúvidas e solicitações sobre vagas." },
+          { label: "Receber Evento", value: "event", emoji: "🎉", description: "Atendimento para recebimento de eventos." }
         ])
     )
   ];
@@ -1084,18 +1052,23 @@ function ticketCreationPanelEmbed() {
   const embed = new EmbedBuilder()
     .setColor(c.ticketPanelColor || c.embedColor || "#5865F2")
     .setTitle(c.ticketPanelTitle || "🎫 CENTRAL DE TICKETS")
-    .setDescription(c.ticketPanelDescription || [
-      "**Escolha o tipo de atendimento que você precisa:**", "",
+    .setDescription((c.ticketPanelDescription || [
+      "**Central oficial de atendimento.**",
+      "",
+      "Selecione no menu abaixo o tipo de atendimento que você precisa.",
+      "",
       "🛠️ **Suporte** — Atendimento geral.",
       "💰 **Reembolso** — Solicitações relacionadas a reembolso.",
       "📋 **Vagas** — Dúvidas e solicitações sobre vagas.",
-      "🎉 **Receber Evento** — Atendimento para recebimento de eventos.", "",
-      "🔒 O atendimento é privado e visível somente para você e a equipe responsável.", "",
-      "Clique no botão correspondente para abrir seu ticket privado."
-    ].join("\n"));
+      "🎉 **Receber Evento** — Atendimento para recebimento de eventos.",
+      "",
+      "🔒 O atendimento é privado e somente você e a equipe responsável terão acesso."
+    ].join("\n")).trim())
+    .setFooter({ text: c.ticketPanelFooter || "🎮 Sistema de Apostas" });
+
   if (c.ticketPanelBanner && validUrl(c.ticketPanelBanner)) embed.setImage(c.ticketPanelBanner);
   if (c.ticketPanelThumbnail && validUrl(c.ticketPanelThumbnail)) embed.setThumbnail(c.ticketPanelThumbnail);
-  if (c.ticketPanelFooter) embed.setFooter({ text: c.ticketPanelFooter });
+
   return embed;
 }
 
@@ -1108,7 +1081,7 @@ function ticketPanelComponents(ticketId) {
         .addOptions([
           { label: "Finalizar ticket", value: "finish", emoji: "🏁", description: "Finaliza e fecha este atendimento." },
           { label: "Adicionar membro", value: "add", emoji: "👤", description: "Adiciona um membro ao ticket." },
-          { label: "Mudar nome do canal", value: "rename", emoji: "✏️", description: "Altera o nome deste ticket." }
+          { label: "Mudar nome do canal", value: "rename", emoji: "✏️", description: "Altera o nome deste canal de atendimento." }
         ])
     )
   ];
@@ -1228,6 +1201,51 @@ function findTicketByChannel(guildId, channelId) {
 }
 
 /* ========================================================
+   PIX / QR CODE AUTOMÁTICO
+======================================================== */
+
+function crc16Pix(payload) {
+  let crc = 0xFFFF;
+  for (let i = 0; i < payload.length; i++) {
+    crc ^= payload.charCodeAt(i) << 8;
+    for (let j = 0; j < 8; j++) {
+      crc = (crc & 0x8000) ? ((crc << 1) ^ 0x1021) : (crc << 1);
+      crc &= 0xFFFF;
+    }
+  }
+  return crc.toString(16).toUpperCase().padStart(4, "0");
+}
+
+function pixField(id, value) {
+  return `${id}${String(value.length).padStart(2, "0")}${value}`;
+}
+
+function createPixPayload(name, key, city = "BRASILIA") {
+  const merchantAccount =
+    pixField("00", "BR.GOV.BCB.PIX") +
+    pixField("01", key);
+
+  const payloadWithoutCrc = [
+    pixField("00", "01"),
+    pixField("26", merchantAccount),
+    pixField("52", "0000"),
+    pixField("53", "986"),
+    pixField("58", "BR"),
+    pixField("59", name.slice(0, 25)),
+    pixField("60", city.slice(0, 15)),
+    pixField("62", pixField("05", "***")),
+    "6304"
+  ].join("");
+
+  return payloadWithoutCrc + crc16Pix(payloadWithoutCrc);
+}
+
+function createPixQrUrl(name, key) {
+  const payload = createPixPayload(name, key);
+  return `https://api.qrserver.com/v1/create-qr-code/?size=600x600&data=${encodeURIComponent(payload)}`;
+}
+
+/* ========================================================
    CONFIGURAÇÃO
 ======================================================== */
 
@@ -1238,84 +1256,20 @@ function configButtons() {
         .setCustomId("config_menu")
         .setPlaceholder("⚙️ Selecione o que deseja configurar")
         .addOptions([
-          {
-            label: "Cargos do sistema",
-            value: "config_roles",
-            emoji: "👥",
-            description: "Configure Mediador, Analista e Influencer/Streamer."
-          },
-          {
-            label: "Cargos dos Tickets",
-            value: "config_support_roles",
-            emoji: "🛡️",
-            description: "Defina quem pode atender e administrar tickets."
-          },
-          {
-            label: "Administradores",
-            value: "config_admins",
-            emoji: "👑",
-            description: "Cadastre ou remova administradores do bot."
-          },
-          {
-            label: "Taxa do sistema",
-            value: "config_fee",
-            emoji: "💰",
-            description: "Configure a taxa utilizada nas apostas."
-          },
-          {
-            label: "Aparência geral",
-            value: "config_appearance",
-            emoji: "🎨",
-            description: "Defina cor das embeds e foto do bot."
-          },
-          {
-            label: "Canais do sistema",
-            value: "config_channels",
-            emoji: "📢",
-            description: "Configure os canais das solicitações e mediadores."
-          },
-          {
-            label: "Categoria das apostas",
-            value: "config_category",
-            emoji: "📁",
-            description: "Escolha onde os canais privados das apostas serão criados."
-          },
-          {
-            label: "Categoria Streamer",
-            value: "config_streamer_category",
-            emoji: "🎥",
-            description: "Escolha onde serão criados os canais de Streamer."
-          },
-          {
-            label: "Fila de Mediadores",
-            value: "config_mediator_queue",
-            emoji: "👨‍⚖️",
-            description: "Publique ou atualize a fila de Mediadores."
-          },
-          {
-            label: "Categorias dos Tickets",
-            value: "config_ticket_channels",
-            emoji: "🗂️",
-            description: "Defina onde cada tipo de ticket será criado."
-          },
-          {
-            label: "Configurar painel de Tickets",
-            value: "config_ticket_panel",
-            emoji: "🎫",
-            description: "Edite título, descrição, banner, thumbnail, rodapé e cor."
-          },
-          {
-            label: "Ver configuração atual",
-            value: "config_view",
-            emoji: "🔎",
-            description: "Confira todas as configurações salvas atualmente."
-          },
-          {
-            label: "Salvar configurações",
-            value: "config_save",
-            emoji: "💾",
-            description: "Salve todas as alterações feitas no sistema."
-          }
+          { label: "Cargos da equipe", value: "config_roles", emoji: "👥", description: "Configure Mediador, Analista e Streamer." },
+          { label: "Administradores", value: "config_admins", emoji: "👑", description: "Cadastre ou remova até 20 administradores." },
+          { label: "Taxa das apostas", value: "config_fee", emoji: "💰", description: "Defina a taxa entre R$0,01 e R$0,50." },
+          { label: "Aparência geral", value: "config_appearance", emoji: "🎨", description: "Configure cor e foto padrão das embeds." },
+          { label: "Canais do sistema", value: "config_channels", emoji: "📢", description: "Defina os canais usados pelas análises e mediadores." },
+          { label: "Categoria das apostas", value: "config_category", emoji: "📁", description: "Escolha onde os canais privados serão criados." },
+          { label: "Categoria Streamer", value: "config_streamer_category", emoji: "🎥", description: "Escolha onde as filas de Streamer serão criadas." },
+          { label: "Fila de Mediadores", value: "config_mediator_queue", emoji: "👨‍⚖️", description: "Publique ou atualize a fila de Mediadores." },
+          { label: "Cargos dos Tickets", value: "config_support_roles", emoji: "🎫", description: "Configure Suporte, Supervisor e Auxiliar." },
+          { label: "Categorias dos Tickets", value: "config_ticket_channels", emoji: "🗂️", description: "Defina a categoria de cada tipo de ticket." },
+          { label: "Configurar painel de Tickets", value: "config_ticket_panel", emoji: "🖼️", description: "Edite título, descrição, banner, thumbnail e cor." },
+          { label: "Painel de Cadastro Pix", value: "config_pix_panel", emoji: "💳", description: "Cadastre nome e chave Pix; o QR Code é gerado automaticamente." },
+          { label: "Ver configuração completa", value: "config_view", emoji: "🔎", description: "Veja um resumo de todas as configurações." },
+          { label: "Salvar configurações", value: "config_save", emoji: "💾", description: "Salve imediatamente as alterações atuais." }
         ])
     )
   ];
@@ -1350,17 +1304,6 @@ async function registerCommands() {
         subcommand
           .setName("ticket")
           .setDescription("Abre um ticket privado com a equipe de suporte.")
-      ),
-
-    new SlashCommandBuilder()
-      .setName("cadastro")
-      .setDescription("Cadastra os dados Pix de um usuário.")
-      .setDefaultMemberPermissions(null)
-      .addUserOption(option =>
-        option
-          .setName("usuario")
-          .setDescription("Usuário que receberá o cadastro Pix.")
-          .setRequired(true)
       ),
 
     new SlashCommandBuilder()
@@ -1745,47 +1688,6 @@ client.on("interactionCreate", async interaction => {
         return interaction.showModal(modal);
       }
 
-      /* /cadastro */
-      if (interaction.commandName === "cadastro") {
-        const user = interaction.options.getUser("usuario");
-
-        const modal = new ModalBuilder()
-          .setCustomId(`pix_register|${user.id}`)
-          .setTitle("Cadastro Pix");
-
-        modal.addComponents(
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder()
-              .setCustomId("pix_name")
-              .setLabel("Nome")
-              .setPlaceholder("Nome do titular do Pix")
-              .setStyle(TextInputStyle.Short)
-              .setRequired(true)
-              .setMaxLength(100)
-          ),
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder()
-              .setCustomId("pix_key")
-              .setLabel("Chave Pix")
-              .setPlaceholder("Digite a chave Pix")
-              .setStyle(TextInputStyle.Short)
-              .setRequired(true)
-              .setMaxLength(200)
-          ),
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder()
-              .setCustomId("pix_qr")
-              .setLabel("QR Code")
-              .setPlaceholder("URL da imagem do QR Code")
-              .setStyle(TextInputStyle.Short)
-              .setRequired(true)
-              .setMaxLength(500)
-          )
-        );
-
-        return interaction.showModal(modal);
-      }
-
       /* /criar ticket */
       if (
         interaction.commandName === "criar" &&
@@ -1894,6 +1796,37 @@ client.on("interactionCreate", async interaction => {
     ---------------------------------------------------- */
 
     if (interaction.isButton()) {
+      if (interaction.customId === "pix_open_register") {
+        if (!(await requireAdmin(interaction))) return;
+        const modal = new ModalBuilder()
+          .setCustomId("pix_register_panel")
+          .setTitle("Cadastro Pix");
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("pix_name")
+              .setLabel("Nome do titular")
+              .setPlaceholder("Ex.: João da Silva")
+              .setStyle(TextInputStyle.Short)
+              .setRequired(true)
+              .setMaxLength(100)
+          ),
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("pix_key")
+              .setLabel("Chave Pix")
+              .setPlaceholder("CPF, CNPJ, e-mail, telefone ou chave aleatória")
+              .setStyle(TextInputStyle.Short)
+              .setRequired(true)
+              .setMaxLength(200)
+          )
+        );
+        return interaction.showModal(modal);
+      }
+      if (interaction.customId === "config_back") {
+        if (!(await requireAdmin(interaction))) return;
+        return interaction.update({ content: "", embeds: [configEmbed()], components: configButtons() });
+      }
       const [action, ...parts] = interaction.customId.split("|");
 
       /* CRIAÇÃO DE TICKETS */
@@ -2096,19 +2029,6 @@ client.on("interactionCreate", async interaction => {
         });
       }
 
-      if (action === "config_ticket_panel") {
-        if (!(await requireAdmin(interaction))) return;
-        const modal = new ModalBuilder().setCustomId("ticket_panel_modal").setTitle("Configurar painel de Tickets");
-        modal.addComponents(
-          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("ticket_panel_title").setLabel("Título").setPlaceholder("🎫 CENTRAL DE TICKETS").setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(256)),
-          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("ticket_panel_description").setLabel("Descrição").setPlaceholder("Texto apresentado no painel de tickets").setStyle(TextInputStyle.Paragraph).setRequired(false).setMaxLength(4000)),
-          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("ticket_panel_banner").setLabel("Banner — URL da imagem").setPlaceholder("https://...").setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(500)),
-          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("ticket_panel_thumbnail").setLabel("Thumbnail — URL da imagem").setPlaceholder("https://...").setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(500)),
-          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("ticket_panel_footer").setLabel("Rodapé e cor HEX").setPlaceholder("Rodapé | #5865F2").setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(256))
-        );
-        return interaction.showModal(modal);
-      }
-
       if (action === "config_ticket_channels") {
         if (!(await requireAdmin(interaction))) return;
 
@@ -2219,6 +2139,70 @@ client.on("interactionCreate", async interaction => {
           content: "✅ Configuração salva.",
           flags: MessageFlags.Ephemeral
         });
+      }
+
+      if (action === "config_ticket_panel") {
+        if (!(await requireAdmin(interaction))) return;
+
+        const c = db.config;
+        const modal = new ModalBuilder()
+          .setCustomId("ticket_panel_modal")
+          .setTitle("Configurar painel de Tickets");
+
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("ticket_title")
+              .setLabel("Título do painel")
+              .setPlaceholder("🎫 CENTRAL DE TICKETS")
+              .setStyle(TextInputStyle.Short)
+              .setRequired(false)
+              .setMaxLength(256)
+              .setValue(c.ticketPanelTitle || "")
+          ),
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("ticket_description")
+              .setLabel("Descrição do painel")
+              .setPlaceholder("Explique de forma clara como o usuário deve abrir um ticket.")
+              .setStyle(TextInputStyle.Paragraph)
+              .setRequired(false)
+              .setMaxLength(4000)
+              .setValue(c.ticketPanelDescription || "")
+          ),
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("ticket_banner")
+              .setLabel("Banner — URL da imagem")
+              .setPlaceholder("https://...")
+              .setStyle(TextInputStyle.Short)
+              .setRequired(false)
+              .setMaxLength(500)
+              .setValue(c.ticketPanelBanner || "")
+          ),
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("ticket_thumbnail")
+              .setLabel("Thumbnail — URL da imagem")
+              .setPlaceholder("https://...")
+              .setStyle(TextInputStyle.Short)
+              .setRequired(false)
+              .setMaxLength(500)
+              .setValue(c.ticketPanelThumbnail || "")
+          ),
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("ticket_color")
+              .setLabel("Cor HEX")
+              .setPlaceholder("#5865F2")
+              .setStyle(TextInputStyle.Short)
+              .setRequired(false)
+              .setMaxLength(7)
+              .setValue(c.ticketPanelColor || c.embedColor || "#5865F2")
+          )
+        );
+
+        return interaction.showModal(modal);
       }
 
       /* ADMIN */
@@ -2813,6 +2797,20 @@ client.on("interactionCreate", async interaction => {
        PAINEL DE SUPORTE / TICKETS
     ---------------------------------------------------- */
 
+    if (interaction.isStringSelectMenu() && interaction.customId === "ticket_create_menu") {
+      const ticketType = interaction.values[0] || "support";
+      const type = TICKET_TYPES[ticketType];
+      if (!type) return deny(interaction, "❌ Tipo de ticket inválido.");
+      try {
+        const result = await createTicketChannel(interaction, ticketType);
+        if (result.existing) return interaction.reply({ content: `🎫 Você já possui um ticket aberto: ${result.channel}`, flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: `✅ Seu ticket de **${type.label}** foi criado: ${result.channel}`, flags: MessageFlags.Ephemeral });
+      } catch (error) {
+        console.error("❌ Erro ao criar ticket:", error);
+        return deny(interaction, `❌ Não foi possível criar o ticket de **${type.label}**. Configure a categoria correspondente em /config.`);
+      }
+    }
+
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith("aux_panel|")) {
       if (!(await requireSupport(interaction))) return;
 
@@ -2845,6 +2843,12 @@ client.on("interactionCreate", async interaction => {
         }, 3000);
 
         return;
+      }
+
+      if (action === "rename") {
+        const modal = new ModalBuilder().setCustomId(`ticket_rename|${ticket.id}`).setTitle("Mudar nome do canal");
+        modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("channel_name").setLabel("Novo nome do canal").setPlaceholder("Ex.: suporte-jogador").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(90)));
+        return interaction.showModal(modal);
       }
 
       if (action === "add") {
@@ -3006,7 +3010,7 @@ client.on("interactionCreate", async interaction => {
                 : null;
 
               const payload = {
-                embeds: [makeEmbed(`🎮 FILA ${setup.format}`, queueDescription(queue))],
+                embeds: [queueEmbed(queue)],
                 components: queueComponents(queue)
               };
 
@@ -3154,33 +3158,6 @@ client.on("interactionCreate", async interaction => {
         });
       }
 
-      if (interaction.customId === "ticket_panel_modal") {
-        if (!(await requireAdmin(interaction))) return;
-        const title = interaction.fields.getTextInputValue("ticket_panel_title").trim();
-        const description = interaction.fields.getTextInputValue("ticket_panel_description").trim();
-        const banner = interaction.fields.getTextInputValue("ticket_panel_banner").trim();
-        const thumbnail = interaction.fields.getTextInputValue("ticket_panel_thumbnail").trim();
-        const footerAndColor = interaction.fields.getTextInputValue("ticket_panel_footer").trim();
-        if (banner && !validUrl(banner)) return deny(interaction, "❌ A URL do banner é inválida.");
-        if (thumbnail && !validUrl(thumbnail)) return deny(interaction, "❌ A URL da thumbnail é inválida.");
-        let footer = footerAndColor || db.config.ticketPanelFooter || "🎮 Sistema de Apostas";
-        let color = db.config.ticketPanelColor || db.config.embedColor || "#5865F2";
-        if (footerAndColor.includes("|")) {
-          const [footerPart, colorPart] = footerAndColor.split("|");
-          footer = footerPart.trim() || "🎮 Sistema de Apostas";
-          if (colorPart.trim()) color = colorPart.trim();
-        }
-        if (!validHex(color)) return deny(interaction, "❌ A cor deve estar no formato #5865F2. Use: `Meu rodapé | #5865F2`.");
-        db.config.ticketPanelTitle = title || "🎫 CENTRAL DE TICKETS";
-        db.config.ticketPanelDescription = description || null;
-        db.config.ticketPanelBanner = banner || null;
-        db.config.ticketPanelThumbnail = thumbnail || null;
-        db.config.ticketPanelFooter = footer;
-        db.config.ticketPanelColor = color;
-        saveDatabase();
-        return interaction.reply({ embeds: [ticketCreationPanelEmbed()], components: ticketCreationPanelComponents(), content: "✅ **Painel de Tickets configurado com sucesso.**\n\nO `/criar ticket` agora usará esta personalização.", flags: MessageFlags.Ephemeral });
-      }
-
       if (interaction.customId === "embed_builder") {
         if (!(await requireAdmin(interaction))) return;
 
@@ -3214,56 +3191,44 @@ client.on("interactionCreate", async interaction => {
         });
       }
 
-      /* PIX */
+      /* RENOMEAR TICKET */
+      if (interaction.customId.startsWith("ticket_rename|")) {
+        if (!(await requireSupport(interaction))) return;
+        const ticketId = interaction.customId.split("|")[1];
+        const ticket = db.tickets?.[ticketId];
+        if (!ticket || ticket.guildId !== interaction.guild.id || ticket.channelId !== interaction.channel.id || ticket.status !== "open") return deny(interaction, "❌ Este ticket não está mais aberto.");
+        const rawName = interaction.fields.getTextInputValue("channel_name").trim().toLowerCase();
+        const name = rawName.replace(/[^a-z0-9-_]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").slice(0, 90);
+        if (!name) return deny(interaction, "❌ Informe um nome válido para o canal.");
+        await interaction.channel.setName(name).catch(() => null);
+        return interaction.reply({ content: `✅ Canal renomeado para **#${name}**.`, flags: MessageFlags.Ephemeral });
+      }
 
-      if (interaction.customId.startsWith("pix_register|")) {
+      /* PAINEL DE TICKETS */
+      if (interaction.customId === "ticket_panel_modal") {
         if (!(await requireAdmin(interaction))) return;
 
-        const userId =
-          interaction.customId.split("|")[1];
+        const title = interaction.fields.getTextInputValue("ticket_title").trim();
+        const description = interaction.fields.getTextInputValue("ticket_description").trim();
+        const banner = interaction.fields.getTextInputValue("ticket_banner").trim();
+        const thumbnail = interaction.fields.getTextInputValue("ticket_thumbnail").trim();
+        const color = interaction.fields.getTextInputValue("ticket_color").trim() || db.config.embedColor || "#5865F2";
 
-        const name =
-          interaction.fields.getTextInputValue("pix_name").trim();
+        if (!validHex(color)) return deny(interaction, "❌ A cor deve estar no formato `#5865F2`.");
+        if (banner && !validUrl(banner)) return deny(interaction, "❌ A URL do banner é inválida.");
+        if (thumbnail && !validUrl(thumbnail)) return deny(interaction, "❌ A URL da thumbnail é inválida.");
 
-        const key =
-          interaction.fields.getTextInputValue("pix_key").trim();
-
-        const qr =
-          interaction.fields.getTextInputValue("pix_qr").trim();
-
-        if (!validUrl(qr)) {
-          return deny(
-            interaction,
-            "❌ A URL do QR Code não é válida."
-          );
-        }
-
-        db.pix[userId] = {
-          name,
-          key,
-          qr,
-          updatedAt: Date.now()
-        };
-
+        db.config.ticketPanelTitle = title || "🎫 CENTRAL DE TICKETS";
+        db.config.ticketPanelDescription = description || null;
+        db.config.ticketPanelBanner = banner || null;
+        db.config.ticketPanelThumbnail = thumbnail || null;
+        db.config.ticketPanelColor = color;
         saveDatabase();
 
-        const e = makeEmbed(
-          "💳 CADASTRO PIX",
-          [
-            "**Cadastro de pagamento salvo.**",
-            "",
-            `👤 **Usuário:** <@${userId}>`,
-            `📝 **Titular:** ${name}`,
-            `🔑 **Chave Pix:** \`${key}\``,
-            "",
-            `🔗 **Link do QR Code:** ${qr}`,
-            "",
-            "✅ Os dados estão prontos para serem usados nas apostas."
-          ].join("\n")
-        );
-
         return interaction.reply({
-          embeds: [e],
+          content: "✅ Painel de Tickets atualizado. O próximo `/criar ticket` usará essas configurações.",
+          embeds: [ticketCreationPanelEmbed()],
+          components: ticketCreationPanelComponents(),
           flags: MessageFlags.Ephemeral
         });
       }
@@ -3405,6 +3370,44 @@ client.on("interactionCreate", async interaction => {
         });
       }
 
+      /* PIX CADASTRO PELO PAINEL */
+      if (interaction.customId === "pix_register_panel") {
+        if (!(await requireAdmin(interaction))) return;
+
+        const name = interaction.fields.getTextInputValue("pix_name").trim();
+        const key = interaction.fields.getTextInputValue("pix_key").trim();
+
+        if (!name || !key) {
+          return deny(interaction, "❌ Nome e chave Pix são obrigatórios.");
+        }
+
+        const qr = createPixQrUrl(name, key);
+        const userId = interaction.user.id;
+
+        db.pix[userId] = {
+          name,
+          key,
+          qr,
+          updatedAt: Date.now()
+        };
+
+        saveDatabase();
+
+        const e = makeEmbed("💳 CADASTRO PIX", [
+          "**Cadastro realizado com sucesso.**",
+          "",
+          `👤 **Titular:** ${name}`,
+          `🔑 **Chave Pix:** \`${key}\``,
+          "",
+          "🧾 **QR Code:** gerado automaticamente.",
+          "",
+          "✅ Os dados já estão prontos para serem usados nas apostas."
+        ].join("\n"));
+
+        e.setImage(qr);
+        return interaction.reply({ embeds: [e], flags: MessageFlags.Ephemeral });
+      }
+
       /* ADM ADD */
       if (interaction.customId === "admin_add_modal") {
         if (!(await requireAdmin(interaction))) return;
@@ -3500,7 +3503,7 @@ client.on("interactionCreate", async interaction => {
             queue.channelId = channel.id;
             queue.guildId = interaction.guild.id;
             let msg = queue.messageId ? await channel.messages.fetch(queue.messageId).catch(() => null) : null;
-            const payload = { embeds: [makeEmbed(`🎮 FILA ${setup.format}`, queueDescription(queue))], components: queueComponents(queue) };
+            const payload = { embeds: [queueEmbed(queue)], components: queueComponents(queue) };
             if (msg) await msg.edit(payload);
             else { msg = await channel.send(payload); queue.messageId = msg.id; }
             published.push(money(value));
@@ -3518,59 +3521,40 @@ client.on("interactionCreate", async interaction => {
     }
 
     if (interaction.isStringSelectMenu()) {
-      /* MENU PRINCIPAL DO /config — estilo lista */
       if (interaction.customId === "config_menu") {
         if (!(await requireAdmin(interaction))) return;
-
         const selected = interaction.values[0];
 
+        if (selected === "config_view") {
+          return interaction.update({ embeds: [configEmbed()], components: configButtons() });
+        }
+        if (selected === "config_save") {
+          saveDatabase();
+          return interaction.update({ content: "✅ **Configurações salvas com sucesso.**\n\nAs alterações atuais foram gravadas no banco de dados.", embeds: [], components: configButtons() });
+        }
+
         if (selected === "config_roles") {
-          return interaction.reply({
-            content: "👥 **CARGOS DO SISTEMA**\\n\\nConfigure abaixo cada cargo e veja exatamente para que ele será usado.",
-            components: [
-              new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder().setCustomId("set_mediator_role").setPlaceholder("👥 Selecionar cargo Mediador")),
-              new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder().setCustomId("set_analyst_role").setPlaceholder("🔎 Selecionar cargo Analista")),
-              new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder().setCustomId("set_streamer_role").setPlaceholder("🎥 Selecionar cargo Influencer / Streamer"))
-            ],
-            flags: MessageFlags.Ephemeral
-          });
+          return interaction.update({ content: "👥 **CARGOS DA EQUIPE**\n\nConfigure abaixo cada cargo usado pelo bot. Essas funções controlam quem pode atuar como Mediador, Analista ou Streamer.", components: [
+            new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder().setCustomId("set_mediator_role").setPlaceholder("👨‍⚖️ Selecionar cargo Mediador")),
+            new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder().setCustomId("set_analyst_role").setPlaceholder("🔎 Selecionar cargo Analista")),
+            new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder().setCustomId("set_streamer_role").setPlaceholder("🎥 Selecionar cargo Influencer / Streamer"))
+          ]});
         }
-
         if (selected === "config_support_roles") {
-          return interaction.reply({
-            content: "🎫 **CARGOS DOS TICKETS**\\n\\nDefina quem poderá atender, assumir e administrar os tickets.",
-            components: [
-              new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder().setCustomId("set_support_role").setPlaceholder("🛠️ Selecionar cargo Suporte")),
-              new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder().setCustomId("set_supervisor_role").setPlaceholder("👤 Selecionar cargo Supervisor")),
-              new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder().setCustomId("set_auxiliary_role").setPlaceholder("🧰 Selecionar cargo Auxiliar"))
-            ],
-            flags: MessageFlags.Ephemeral
-          });
+          return interaction.update({ content: "🎫 **CARGOS DOS TICKETS**\n\nDefina quais cargos poderão visualizar e administrar os atendimentos de Suporte.", components: [
+            new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder().setCustomId("set_support_role").setPlaceholder("🛠️ Selecionar cargo Suporte")),
+            new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder().setCustomId("set_supervisor_role").setPlaceholder("👔 Selecionar cargo Supervisor")),
+            new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder().setCustomId("set_auxiliary_role").setPlaceholder("🔧 Selecionar cargo Auxiliar"))
+          ]});
         }
-
         if (selected === "config_admins") {
-          return interaction.reply({
-            embeds: [makeEmbed("👑 ADMINISTRADORES", [
-              `**Administradores cadastrados:** ${db.config.admins.length}/20`,
-              "",
-              db.config.admins.length ? db.config.admins.map((id, i) => `**${i + 1}.** <@${id}>`).join("\\n") : "_Nenhum ADM cadastrado._"
-            ].join("\\n"))],
-            components: [new ActionRowBuilder().addComponents(
-              new ButtonBuilder().setCustomId("admin_add").setLabel("Cadastrar ADM").setEmoji("➕").setStyle(ButtonStyle.Success),
-              new ButtonBuilder().setCustomId("admin_remove").setLabel("Remover ADM").setEmoji("➖").setStyle(ButtonStyle.Danger)
-            )],
-            flags: MessageFlags.Ephemeral
-          });
+          return interaction.update({ content: `👑 **ADMINISTRADORES**\n\nAdministradores cadastrados: **${db.config.admins.length}/20**\n\nUse os botões abaixo para adicionar ou remover administradores.`, embeds: [makeEmbed("👑 ADMINISTRADORES", db.config.admins.length ? db.config.admins.map((id,i)=>`**${i+1}.** <@${id}>`).join("\n") : "_Nenhum ADM cadastrado._")], components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId("admin_add").setLabel("Cadastrar ADM").setEmoji("➕").setStyle(ButtonStyle.Success), new ButtonBuilder().setCustomId("admin_remove").setLabel("Remover ADM").setEmoji("➖").setStyle(ButtonStyle.Danger))]});
         }
-
         if (selected === "config_fee") {
           const modal = new ModalBuilder().setCustomId("fee_modal").setTitle("Configurar taxa");
-          modal.addComponents(new ActionRowBuilder().addComponents(
-            new TextInputBuilder().setCustomId("fee").setLabel("Taxa de R$0,01 até R$0,50").setPlaceholder("Ex.: 0,25").setStyle(TextInputStyle.Short).setRequired(true)
-          ));
+          modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("fee").setLabel("Taxa de R$0,01 até R$0,50").setPlaceholder("Ex.: 0,25").setStyle(TextInputStyle.Short).setRequired(true)));
           return interaction.showModal(modal);
         }
-
         if (selected === "config_appearance") {
           const modal = new ModalBuilder().setCustomId("appearance_modal").setTitle("Aparência das embeds");
           modal.addComponents(
@@ -3579,101 +3563,64 @@ client.on("interactionCreate", async interaction => {
           );
           return interaction.showModal(modal);
         }
-
         if (selected === "config_channels") {
-          return interaction.reply({
-            content: "📢 **CANAIS DO SISTEMA**\\n\\nEscolha cada canal conforme a finalidade indicada abaixo.",
-            components: [
-              new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("channel_ssmob").setPlaceholder("📱 Canal das solicitações .ssmob").setChannelTypes(ChannelType.GuildText)),
-              new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("channel_ssemu").setPlaceholder("🎮 Canal das solicitações .ssemu").setChannelTypes(ChannelType.GuildText)),
-              new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("channel_mediator_queue").setPlaceholder("👨‍⚖️ Canal da fila de Mediadores").setChannelTypes(ChannelType.GuildText))
-            ],
-            flags: MessageFlags.Ephemeral
-          });
+          return interaction.update({ content: "📢 **CANAIS DO SISTEMA**\n\nSelecione cada canal. O texto abaixo de cada opção explica sua finalidade.", components: [
+            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("channel_ssmob").setPlaceholder("📱 Canal das solicitações .ssmob").setChannelTypes(ChannelType.GuildText)),
+            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("channel_ssemu").setPlaceholder("🖥️ Canal das solicitações .ssemu").setChannelTypes(ChannelType.GuildText)),
+            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("channel_mediator_queue").setPlaceholder("👨‍⚖️ Canal da fila de Mediadores").setChannelTypes(ChannelType.GuildText))
+          ]});
         }
-
         if (selected === "config_category") {
-          return interaction.reply({
-            content: "📁 **CATEGORIA DAS APOSTAS**\\n\\nEscolha a categoria onde os canais privados das apostas serão criados.",
-            components: [new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("bet_category").setPlaceholder("📁 Selecionar categoria").setChannelTypes(ChannelType.GuildCategory))],
-            flags: MessageFlags.Ephemeral
-          });
+          return interaction.update({ content: "📁 **CATEGORIA DAS APOSTAS**\n\nEscolha a categoria onde os canais privados das apostas serão criados automaticamente.", components: [new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("bet_category").setPlaceholder("📁 Selecionar categoria das apostas").setChannelTypes(ChannelType.GuildCategory))]});
         }
-
         if (selected === "config_streamer_category") {
-          return interaction.reply({
-            content: "🎥 **CATEGORIA STREAMER**\\n\\nEscolha a categoria onde os canais das filas de Streamer serão criados.",
-            components: [new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("streamer_category").setPlaceholder("🎥 Selecionar categoria Streamer").setChannelTypes(ChannelType.GuildCategory))],
-            flags: MessageFlags.Ephemeral
-          });
+          return interaction.update({ content: "🎥 **CATEGORIA STREAMER**\n\nEscolha a categoria onde os canais das filas de Streamer serão criados.", components: [new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("streamer_category").setPlaceholder("🎥 Selecionar categoria Streamer").setChannelTypes(ChannelType.GuildCategory))]});
         }
-
         if (selected === "config_mediator_queue") {
-          if (!db.config.mediatorQueueChannelId) {
-            return deny(interaction, "❌ Primeiro configure o canal da fila de Mediadores em **Canais do sistema**.");
-          }
+          if (!db.config.mediatorQueueChannelId) return deny(interaction, "❌ Primeiro configure o canal da fila de Mediadores.");
           await updateMediatorQueueMessage(interaction.guild);
-          return interaction.reply({ content: "✅ Fila de Mediadores publicada/atualizada.", flags: MessageFlags.Ephemeral });
+          return interaction.update({ content: "✅ **Fila de Mediadores publicada/atualizada com sucesso.**", components: configButtons(), embeds: [] });
         }
-
         if (selected === "config_ticket_channels") {
-          return interaction.reply({
-            content: "🗂️ **CATEGORIAS DOS TICKETS**\\n\\nEscolha uma categoria para cada tipo. Os tickets serão criados dentro da categoria selecionada.",
+          return interaction.update({ content: "🗂️ **CATEGORIAS DOS TICKETS**\n\nEscolha uma categoria para cada tipo. Os tickets serão criados dentro da categoria correspondente.", components: [
+            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("ticket_category_support").setPlaceholder("🛠️ Categoria — Suporte").setChannelTypes(ChannelType.GuildCategory)),
+            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("ticket_category_refund").setPlaceholder("💰 Categoria — Reembolso").setChannelTypes(ChannelType.GuildCategory)),
+            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("ticket_category_vacancies").setPlaceholder("📋 Categoria — Vagas").setChannelTypes(ChannelType.GuildCategory)),
+            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("ticket_category_event").setPlaceholder("🎉 Categoria — Receber Evento").setChannelTypes(ChannelType.GuildCategory))
+          ]});
+        }
+        if (selected === "config_pix_panel") {
+          return interaction.update({
+            content: "💳 **PAINEL DE CADASTRO PIX**\n\nUse o botão abaixo para cadastrar os dados Pix. Você só precisa informar o **nome do titular** e a **chave Pix**. O QR Code será gerado automaticamente pelo bot.",
             components: [
-              new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("ticket_category_support").setPlaceholder("🛠️ Categoria — Suporte").setChannelTypes(ChannelType.GuildCategory)),
-              new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("ticket_category_refund").setPlaceholder("💰 Categoria — Reembolso").setChannelTypes(ChannelType.GuildCategory)),
-              new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("ticket_category_vacancies").setPlaceholder("📋 Categoria — Vagas").setChannelTypes(ChannelType.GuildCategory)),
-              new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("ticket_category_event").setPlaceholder("🎉 Categoria — Receber Evento").setChannelTypes(ChannelType.GuildCategory))
-            ],
-            flags: MessageFlags.Ephemeral
+              new ActionRowBuilder().addComponents(
+                new ButtonBuilder()
+                  .setCustomId("pix_open_register")
+                  .setLabel("Cadastrar Pix")
+                  .setEmoji("💳")
+                  .setStyle(ButtonStyle.Success)
+              ),
+              new ActionRowBuilder().addComponents(
+                new ButtonBuilder()
+                  .setCustomId("config_back")
+                  .setLabel("Voltar ao /config")
+                  .setEmoji("↩️")
+                  .setStyle(ButtonStyle.Secondary)
+              )
+            ]
           });
         }
-
         if (selected === "config_ticket_panel") {
+          const c = db.config;
           const modal = new ModalBuilder().setCustomId("ticket_panel_modal").setTitle("Configurar painel de Tickets");
           modal.addComponents(
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("ticket_panel_title").setLabel("Título").setPlaceholder("🎫 CENTRAL DE TICKETS").setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(256)),
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("ticket_panel_description").setLabel("Descrição").setPlaceholder("Texto apresentado no painel de tickets").setStyle(TextInputStyle.Paragraph).setRequired(false).setMaxLength(4000)),
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("ticket_panel_banner").setLabel("Banner — URL da imagem").setPlaceholder("https://...").setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(500)),
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("ticket_panel_thumbnail").setLabel("Thumbnail — URL da imagem").setPlaceholder("https://...").setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(500)),
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("ticket_panel_footer").setLabel("Rodapé e cor HEX").setPlaceholder("Rodapé | #5865F2").setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(256))
+            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("ticket_title").setLabel("Título do painel").setPlaceholder("🎫 CENTRAL DE TICKETS").setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(256).setValue(c.ticketPanelTitle || "")),
+            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("ticket_description").setLabel("Descrição do painel").setPlaceholder("Explique como o usuário deve abrir um ticket.").setStyle(TextInputStyle.Paragraph).setRequired(false).setMaxLength(4000).setValue(c.ticketPanelDescription || "")),
+            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("ticket_banner").setLabel("Banner — URL da imagem").setPlaceholder("https://...").setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(500).setValue(c.ticketPanelBanner || "")),
+            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("ticket_thumbnail").setLabel("Thumbnail — URL da imagem").setPlaceholder("https://...").setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(500).setValue(c.ticketPanelThumbnail || "")),
+            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("ticket_color").setLabel("Cor HEX").setPlaceholder("#5865F2").setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(7).setValue(c.ticketPanelColor || c.embedColor || "#5865F2"))
           );
           return interaction.showModal(modal);
-        }
-
-        if (selected === "config_view") {
-          return interaction.reply({ embeds: [configEmbed()], flags: MessageFlags.Ephemeral });
-        }
-
-        if (selected === "config_save") {
-          saveDatabase();
-          return interaction.reply({ content: "✅ Configuração salva com sucesso.", flags: MessageFlags.Ephemeral });
-        }
-      }
-
-      /* PAINEL DE CRIAÇÃO DE TICKETS — estilo lista */
-      if (interaction.customId === "ticket_create_menu") {
-        const ticketType = interaction.values[0] || "support";
-        const type = TICKET_TYPES[ticketType];
-        if (!type) return deny(interaction, "❌ Tipo de ticket inválido.");
-
-        try {
-          const result = await createTicketChannel(interaction, ticketType);
-
-          if (result.existing) {
-            return interaction.reply({
-              content: `🎫 Você já possui um ticket aberto: ${result.channel}`,
-              flags: MessageFlags.Ephemeral
-            });
-          }
-
-          return interaction.reply({
-            content: `✅ Seu ticket de **${type.label}** foi criado: ${result.channel}`,
-            flags: MessageFlags.Ephemeral
-          });
-        } catch (error) {
-          console.error("❌ Erro ao criar ticket:", error);
-          return deny(interaction, `❌ Não foi possível criar o ticket de **${type.label}**. Configure a categoria correspondente em /config > Categorias dos Tickets e confira as permissões do bot.`);
         }
       }
 
@@ -3763,12 +3710,12 @@ client.on("interactionCreate", async interaction => {
 
               if (sentMessage) {
                 await sentMessage.edit({
-                  embeds: [makeEmbed(`🎮 FILA ${setup.format}`, queueDescription(queue))],
+                  embeds: [queueEmbed(queue)],
                   components: queueComponents(queue)
                 });
               } else {
                 sentMessage = await channel.send({
-                  embeds: [makeEmbed(`🎮 FILA ${setup.format}`, queueDescription(queue))],
+                  embeds: [queueEmbed(queue)],
                   components: queueComponents(queue)
                 });
                 queue.messageId = sentMessage.id;
