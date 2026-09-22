@@ -6,7 +6,8 @@
 REQUISITOS:
   Node.js 18.17+
   discord.js 14+
-  Nenhuma dependência extra para QR Code (usa qrcode se instalado; caso contrário usa geração automática via QuickChart)
+  Node.js 18.17+ / discord.js 14+
+  Modo TURBO: índices O(1), salvamento agrupado, atualização de filas sob demanda e limpeza automática
 
 VARIÁVEIS DE AMBIENTE:
   DISCORD_TOKEN = token do bot
@@ -202,10 +203,101 @@ function mergeDefaults(base, data) {
 
 let db = loadDatabase();
 
+/* ========================================================
+   MODO TURBO / ESCALA
+   - Evita buscas O(n) nas filas, tickets e apostas ativas.
+   - Evita editar mensagens de fila sem necessidade.
+   - Agrupa gravações no disco para não bloquear o event loop.
+   - Limpa registros encerrados antigos para impedir crescimento infinito.
+   - Mantém locks por recurso para evitar corrida quando muitos cliques chegam juntos.
+======================================================== */
+const PERF = {
+  saveDebounceMs: Math.max(1000, Number(process.env.SAVE_DEBOUNCE_MS || 2000)),
+  saveMaxDelayMs: Math.max(3000, Number(process.env.SAVE_MAX_DELAY_MS || 10000)),
+  queueRefreshDebounceMs: Math.max(50, Number(process.env.QUEUE_REFRESH_DEBOUNCE_MS || 250)),
+  cleanupIntervalMs: Math.max(5 * 60 * 1000, Number(process.env.CLEANUP_INTERVAL_MS || 60 * 60 * 1000)),
+  finishedBetRetentionMs: Math.max(60 * 60 * 1000, Number(process.env.FINISHED_BET_RETENTION_MS || 7 * 24 * 60 * 60 * 1000)),
+  closedTicketRetentionMs: Math.max(60 * 60 * 1000, Number(process.env.CLOSED_TICKET_RETENTION_MS || 30 * 24 * 60 * 60 * 1000)),
+  analysisRetentionMs: Math.max(60 * 60 * 1000, Number(process.env.ANALYSIS_RETENTION_MS || 7 * 24 * 60 * 60 * 1000))
+};
+
 // Configurações temporárias do comando /fila por usuário.
 const filaSetup = new Map();
 
+// Índices rápidos: chave -> registro. Eles tornam as verificações de concorrência O(1).
+const indexes = {
+  betByChannel: new Map(),
+  ticketByUser: new Map(),
+  ticketByChannel: new Map(),
+  streamerMatchByChannel: new Map(),
+  queueByUser: new Map(),
+  streamerQueueByUser: new Map(),
+  streamerQueueByStreamer: new Map()
+};
+
+function indexUserKey(guildId, userId) {
+  return `${guildId}:${userId}`;
+}
+
+function rebuildIndexes() {
+  for (const map of Object.values(indexes)) map.clear();
+
+  for (const bet of Object.values(db.bets || {})) {
+    if (bet?.guildId && bet?.channelId && bet.status !== "finished" && bet.status !== "cancelled") {
+      indexes.betByChannel.set(`${bet.guildId}:${bet.channelId}`, bet.id);
+    }
+  }
+
+  for (const ticket of Object.values(db.tickets || {})) {
+    if (ticket?.guildId && ticket?.creatorId && ticket.status === "open") {
+      indexes.ticketByUser.set(indexUserKey(ticket.guildId, ticket.creatorId), ticket.id);
+      if (ticket.channelId) indexes.ticketByChannel.set(`${ticket.guildId}:${ticket.channelId}`, ticket.id);
+    }
+  }
+
+  for (const match of Object.values(db.streamerMatches || {})) {
+    if (match?.guildId && match?.channelId && match.status === "active") {
+      indexes.streamerMatchByChannel.set(`${match.guildId}:${match.channelId}`, match.id);
+    }
+  }
+
+  for (const queue of Object.values(db.queues || {})) {
+    if (!queue?.guildId) continue;
+    for (const userId of queue.players || []) {
+      indexes.queueByUser.set(indexUserKey(queue.guildId, userId), queue.id);
+    }
+  }
+
+  for (const queue of Object.values(db.streamerQueues || {})) {
+    if (!queue?.guildId) continue;
+    indexes.streamerQueueByStreamer.set(indexUserKey(queue.guildId, queue.streamerId), queue.id);
+    for (const userId of queue.players || []) {
+      indexes.streamerQueueByUser.set(indexUserKey(queue.guildId, userId), queue.id);
+    }
+  }
+}
+
+rebuildIndexes();
+
+const resourceLocks = new Map();
+async function withResourceLock(key, task) {
+  const previous = resourceLocks.get(key) || Promise.resolve();
+  let release;
+  const current = new Promise(resolve => { release = resolve; });
+  const queued = previous.catch(() => {}).then(() => current);
+  resourceLocks.set(key, queued);
+
+  await previous.catch(() => {});
+  try {
+    return await task();
+  } finally {
+    release();
+    if (resourceLocks.get(key) === queued) resourceLocks.delete(key);
+  }
+}
+
 let saveTimer = null;
+let saveMaxTimer = null;
 let saveInProgress = false;
 let savePending = false;
 let shutdownStarted = false;
@@ -215,8 +307,12 @@ async function flushDatabase() {
   saveInProgress = true;
   savePending = false;
 
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+  if (saveMaxTimer) { clearTimeout(saveMaxTimer); saveMaxTimer = null; }
+
   try {
-    const data = JSON.stringify(db, null, 2);
+    // O banco continua sendo um snapshot atômico, mas gravações são agrupadas.
+    const data = JSON.stringify(db);
     const tempFile = `${DATA_FILE}.tmp`;
     await fs.promises.writeFile(tempFile, data, "utf8");
     await fs.promises.rename(tempFile, DATA_FILE);
@@ -227,12 +323,7 @@ async function flushDatabase() {
     saveInProgress = false;
 
     if (savePending && !shutdownStarted) {
-      clearTimeout(saveTimer);
-      saveTimer = setTimeout(() => {
-        flushDatabase().catch(error =>
-          console.error("❌ Erro no salvamento agendado:", error)
-        );
-      }, 500);
+      saveDatabase();
     }
   }
 }
@@ -240,15 +331,37 @@ async function flushDatabase() {
 function saveDatabase() {
   savePending = true;
 
-  if (saveTimer) {
-    clearTimeout(saveTimer);
+  if (!saveTimer) {
+    saveTimer = setTimeout(() => {
+      flushDatabase().catch(error => console.error("❌ Erro no salvamento agendado:", error));
+    }, PERF.saveDebounceMs);
   }
 
-  saveTimer = setTimeout(() => {
-    flushDatabase().catch(error =>
-      console.error("❌ Erro no salvamento agendado:", error)
-    );
-  }, 500);
+  if (!saveMaxTimer) {
+    saveMaxTimer = setTimeout(() => {
+      flushDatabase().catch(error => console.error("❌ Erro no salvamento máximo:", error));
+    }, PERF.saveMaxDelayMs);
+  }
+}
+
+function markQueueMember(queue, userId) {
+  if (queue?.guildId && userId) indexes.queueByUser.set(indexUserKey(queue.guildId, userId), queue.id);
+}
+
+function unmarkQueueMember(queue, userId) {
+  if (!queue?.guildId || !userId) return;
+  const key = indexUserKey(queue.guildId, userId);
+  if (indexes.queueByUser.get(key) === queue.id) indexes.queueByUser.delete(key);
+}
+
+function markStreamerMember(queue, userId) {
+  if (queue?.guildId && userId) indexes.streamerQueueByUser.set(indexUserKey(queue.guildId, userId), queue.id);
+}
+
+function unmarkStreamerMember(queue, userId) {
+  if (!queue?.guildId || !userId) return;
+  const key = indexUserKey(queue.guildId, userId);
+  if (indexes.streamerQueueByUser.get(key) === queue.id) indexes.streamerQueueByUser.delete(key);
 }
 
 /* ========================================================
@@ -432,6 +545,8 @@ async function requireStreamer(interaction) {
 
 async function getChannel(guild, channelId) {
   if (!channelId) return null;
+  const cached = guild.channels.cache.get(channelId);
+  if (cached) return cached;
   return guild.channels.fetch(channelId).catch(() => null);
 }
 
@@ -904,6 +1019,7 @@ async function createBetFromQueue(interaction, queue) {
 
   if (!hasMediator) {
     queue.players.unshift(...players);
+    for (const userId of players) markQueueMember(queue, userId);
     delete db.bets[id];
     return null;
   }
@@ -911,6 +1027,9 @@ async function createBetFromQueue(interaction, queue) {
   const channel = await createPrivateBetChannel(interaction.guild, bet);
 
   bet.channelId = channel.id;
+  indexes.betByChannel.set(`${bet.guildId}:${bet.channelId}`, bet.id);
+
+  for (const userId of players) unmarkQueueMember(queue, userId);
 
   await channel.send({
     content: players.map(id => `<@${id}>`).join(" "),
@@ -1058,6 +1177,8 @@ async function startNextStreamerMatch(queue, guild) {
   };
 
   db.streamerMatches[matchId] = match;
+  indexes.streamerMatchByChannel.set(`${guild.id}:${channel.id}`, matchId);
+  markStreamerMember(queue, playerId);
   queue.activeMatchId = matchId;
 
   await channel.send({
@@ -1092,6 +1213,7 @@ async function finishStreamerMatch(message, match) {
 
   match.status = "finished";
   delete db.streamerMatches[match.id];
+  indexes.streamerMatchByChannel.delete(`${match.guildId}:${match.channelId}`);
   queue.activeMatchId = null;
   saveDatabase();
 
@@ -1195,9 +1317,8 @@ async function createTicketChannel(interaction, ticketType = "support") {
   const guild = interaction.guild;
   const type = TICKET_TYPES[ticketType] || TICKET_TYPES.support;
 
-  const existing = Object.values(db.tickets || {}).find(
-    ticket => ticket.guildId === guild.id && ticket.creatorId === interaction.user.id && ticket.status === "open"
-  );
+  const existingId = indexes.ticketByUser.get(indexUserKey(guild.id, interaction.user.id));
+  const existing = existingId ? db.tickets?.[existingId] : null;
 
   if (existing) {
     const existingChannel = await guild.channels.fetch(existing.channelId).catch(() => null);
@@ -1265,6 +1386,8 @@ async function createTicketChannel(interaction, ticketType = "support") {
   };
 
   db.tickets[ticketId] = ticket;
+  indexes.ticketByUser.set(indexUserKey(guild.id, interaction.user.id), ticketId);
+  indexes.ticketByChannel.set(`${guild.id}:${channel.id}`, ticketId);
   saveDatabase();
 
   await channel.send({
@@ -1284,9 +1407,8 @@ async function createTicketChannel(interaction, ticketType = "support") {
 }
 
 function findTicketByChannel(guildId, channelId) {
-  return Object.values(db.tickets || {}).find(
-    ticket => ticket.guildId === guildId && ticket.channelId === channelId && ticket.status === "open"
-  );
+  const id = indexes.ticketByChannel.get(`${guildId}:${channelId}`);
+  return id ? db.tickets?.[id] : undefined;
 }
 
 /* ========================================================
@@ -1454,6 +1576,7 @@ const client = new Client({
 
 client.once('clientReady', async () => {
   console.log(`✅ Bot online: ${client.user.tag}`);
+  console.log(`⚡ MODO TURBO: save=${PERF.saveDebounceMs}ms/${PERF.saveMaxDelayMs}ms | refresh=${PERF.queueRefreshDebounceMs}ms`);
 
   try {
     await registerCommands();
@@ -1543,12 +1666,8 @@ client.on("messageCreate", async message => {
     const roomMatch = message.content.trim().match(/^(\\d{5,20})\\s+(\\S{1,30})$/);
 
     if (roomMatch) {
-      const bet = Object.values(db.bets || {}).find(
-        item =>
-          item.guildId === message.guild.id &&
-          item.channelId === message.channel.id &&
-          item.status !== "finished"
-      );
+      const betId = indexes.betByChannel.get(`${message.guild.id}:${message.channel.id}`);
+      const bet = betId ? db.bets?.[betId] : null;
 
       if (bet && bet.mediatorId === message.author.id && mediatorCheck({ member: message.member })) {
         const roomId = roomMatch[1];
@@ -1606,12 +1725,8 @@ client.on("messageCreate", async message => {
     }
 
     if (command === ".f") {
-      const match = Object.values(db.streamerMatches || {}).find(
-        item =>
-          item.guildId === message.guild.id &&
-          item.channelId === message.channel.id &&
-          item.status === "active"
-      );
+      const matchId = indexes.streamerMatchByChannel.get(`${message.guild.id}:${message.channel.id}`);
+      const match = matchId ? db.streamerMatches?.[matchId] : null;
 
       if (!match) {
         return message.reply("❌ Este comando só pode ser usado no canal privado de uma aposta com Influencer.");
@@ -1646,12 +1761,8 @@ client.on("messageCreate", async message => {
     }
 
     if (command === ".med") {
-      const bet = Object.values(db.bets).find(
-        item =>
-          item.guildId === message.guild.id &&
-          item.channelId === message.channel.id &&
-          item.status !== "finished"
-      );
+      const betId = indexes.betByChannel.get(`${message.guild.id}:${message.channel.id}`);
+      const bet = betId ? db.bets?.[betId] : null;
 
       if (!bet) {
         return message.reply("❌ Este comando só pode ser usado no canal privado de uma aposta.");
@@ -2351,10 +2462,8 @@ client.on("interactionCreate", async interaction => {
         if (interaction.user.id === queue.streamerId) return deny(interaction, "❌ O Influencer não pode entrar na própria fila.");
         if (queue.players.includes(interaction.user.id)) return deny(interaction, "❌ Você já está nessa fila.");
 
-        const alreadyInStreamerQueue = Object.values(db.streamerQueues).some(
-          q => q.guildId === interaction.guild.id && q.players?.includes(interaction.user.id)
-        );
-        if (alreadyInStreamerQueue) return deny(interaction, "❌ Você já está em uma fila de Streamer.");
+        const streamerMembership = indexes.streamerQueueByUser.get(indexUserKey(interaction.guild.id, interaction.user.id));
+        if (streamerMembership && streamerMembership !== queue.id) return deny(interaction, "❌ Você já está em uma fila de Streamer.");
 
         const activeMatch = queue.activeMatchId ? db.streamerMatches?.[queue.activeMatchId] : null;
         queue.players.push(interaction.user.id);
@@ -2363,6 +2472,7 @@ client.on("interactionCreate", async interaction => {
           const match = await startNextStreamerMatch(queue, interaction.guild);
           if (!match) {
             queue.players = queue.players.filter(id => id !== interaction.user.id);
+            unmarkStreamerMember(queue, interaction.user.id);
             saveDatabase();
             await refreshStreamerQueueMessage(queue, interaction.guild);
             return interaction.editReply({ content: "❌ Não foi possível iniciar o atendimento agora." });
@@ -2373,6 +2483,7 @@ client.on("interactionCreate", async interaction => {
           });
         }
 
+        markStreamerMember(queue, interaction.user.id);
         saveDatabase();
         await refreshStreamerQueueMessage(queue, interaction.guild);
         return interaction.editReply({
@@ -2385,6 +2496,7 @@ client.on("interactionCreate", async interaction => {
         if (!queue) return deny(interaction, "❌ Esta fila de Streamer não existe.");
 
         queue.players = queue.players.filter(id => id !== interaction.user.id);
+        unmarkStreamerMember(queue, interaction.user.id);
         saveDatabase();
         await refreshStreamerQueueMessage(queue, interaction.guild);
 
@@ -2408,14 +2520,8 @@ client.on("interactionCreate", async interaction => {
           return deny(interaction, "❌ Você já está nessa fila.");
         }
 
-        const occupiedElsewhere = Object.values(db.queues).some(
-          q =>
-            q.guildId === interaction.guild.id &&
-            q.players?.includes(interaction.user.id) &&
-            q.id !== queue.id
-        );
-
-        if (occupiedElsewhere) {
+        const occupiedQueueId = indexes.queueByUser.get(indexUserKey(interaction.guild.id, interaction.user.id));
+        if (occupiedQueueId && occupiedQueueId !== queue.id) {
           return deny(
             interaction,
             "❌ Você já está em outra fila. Saia dela primeiro."
@@ -2438,12 +2544,14 @@ client.on("interactionCreate", async interaction => {
         }
 
         queue.players.push(interaction.user.id);
+        markQueueMember(queue, interaction.user.id);
 
         if (
           queue.players.length >= requiredPlayers(queue.format) &&
           db.mediatorQueue.length === 0
         ) {
           queue.players.pop();
+          unmarkQueueMember(queue, interaction.user.id);
           saveDatabase();
           await refreshQueueMessage(queue, interaction.guild);
           return interaction.editReply({
@@ -2487,9 +2595,11 @@ client.on("interactionCreate", async interaction => {
 
         const oldLength = queue.players.length;
 
+        const wasInQueue = queue.players.includes(interaction.user.id);
         queue.players = queue.players.filter(
           id => id !== interaction.user.id
         );
+        if (wasInQueue) unmarkQueueMember(queue, interaction.user.id);
 
         saveDatabase();
         await refreshQueueMessage(queue, interaction.guild);
@@ -2720,6 +2830,7 @@ client.on("interactionCreate", async interaction => {
         }
 
         bet.status = "cancelled";
+        indexes.betByChannel.delete(`${bet.guildId}:${bet.channelId}`);
         saveDatabase();
 
         await interaction.reply(
@@ -2804,6 +2915,7 @@ client.on("interactionCreate", async interaction => {
 
         if (bet.confirmedBy.length < bet.players.length) return deny(interaction, "🔒 Aguarde os 2 jogadores confirmarem.");
         bet.status = "finished";
+        indexes.betByChannel.delete(`${bet.guildId}:${bet.channelId}`);
         saveDatabase();
 
         await interaction.reply({
@@ -2947,6 +3059,8 @@ client.on("interactionCreate", async interaction => {
         ticket.status = "closed";
         ticket.closedBy = interaction.user.id;
         ticket.closedAt = Date.now();
+        indexes.ticketByUser.delete(indexUserKey(ticket.guildId, ticket.creatorId));
+        indexes.ticketByChannel.delete(`${ticket.guildId}:${ticket.channelId}`);
         saveDatabase();
 
         await interaction.reply({
@@ -3234,9 +3348,8 @@ client.on("interactionCreate", async interaction => {
           return deny(interaction, "❌ Informe a descrição ou as regras da fila.");
         }
 
-        const existing = Object.values(db.streamerQueues).find(
-          queue => queue.guildId === interaction.guild.id && queue.streamerId === interaction.user.id
-        );
+        const existingId = indexes.streamerQueueByStreamer.get(indexUserKey(interaction.guild.id, interaction.user.id));
+        const existing = existingId ? db.streamerQueues?.[existingId] : null;
 
         if (existing) {
           return deny(interaction, "❌ Você já possui uma fila de Streamer ativa neste servidor.");
@@ -3264,6 +3377,7 @@ client.on("interactionCreate", async interaction => {
 
         queue.messageId = sent.id;
         db.streamerQueues[queueId] = queue;
+        indexes.streamerQueueByStreamer.set(indexUserKey(queue.guildId, queue.streamerId), queueId);
         saveDatabase();
 
         return interaction.reply({
@@ -3853,67 +3967,101 @@ client.on("interactionCreate", async interaction => {
    MANUTENÇÃO DAS FILAS
 ======================================================== */
 
-async function refreshQueueMessage(queue, guild) {
-  if (!queue.channelId || !queue.messageId) return;
+const queueRefreshState = new Map();
+const streamerRefreshState = new Map();
 
-  const channel =
-    await guild.channels
-      .fetch(queue.channelId)
-      .catch(() => null);
+function scheduleDebouncedRefresh(stateMap, key, task) {
+  let state = stateMap.get(key);
+  if (!state) {
+    state = { timer: null, running: false, pending: false };
+    stateMap.set(key, state);
+  }
 
-  if (!channel || !channel.isTextBased()) return;
+  state.pending = true;
+  if (state.timer || state.running) return;
 
-  const message =
-    await channel.messages
-      .fetch(queue.messageId)
-      .catch(() => null);
-
-  if (!message) return;
-
-  await message.edit({
-    embeds: [
-queueEmbed(queue)
-    ],
-    components: queueComponents(queue)
-  }).catch(() => {});
+  state.timer = setTimeout(async () => {
+    state.timer = null;
+    if (state.running || !state.pending) return;
+    state.running = true;
+    state.pending = false;
+    try {
+      await task();
+    } catch (error) {
+      console.error("❌ Erro ao atualizar mensagem:", error);
+    } finally {
+      state.running = false;
+      if (state.pending) scheduleDebouncedRefresh(stateMap, key, task);
+      else if (!state.timer) stateMap.delete(key);
+    }
+  }, PERF.queueRefreshDebounceMs);
 }
 
-let maintenanceRunning = false;
+async function refreshQueueMessage(queue, guild) {
+  if (!queue.channelId || !queue.messageId) return;
+  const key = `${guild.id}:${queue.id}`;
+  scheduleDebouncedRefresh(queueRefreshState, key, async () => {
+    const channel = await getChannel(guild, queue.channelId);
+    if (!channel || !channel.isTextBased()) return;
+    const message = await channel.messages.fetch(queue.messageId).catch(() => null);
+    if (!message) return;
+    await message.edit({
+      embeds: [queueEmbed(queue)],
+      components: queueComponents(queue)
+    }).catch(() => {});
+  });
+}
 
-setInterval(async () => {
-  if (maintenanceRunning) return;
+async function refreshStreamerQueueMessage(queue, guild) {
+  if (!queue.channelId || !queue.messageId) return;
+  const key = `${guild.id}:${queue.id}`;
+  scheduleDebouncedRefresh(streamerRefreshState, key, async () => {
+    const channel = await getChannel(guild, queue.channelId);
+    if (!channel || !channel.isTextBased()) return;
+    const message = await channel.messages.fetch(queue.messageId).catch(() => null);
+    if (!message) return;
+    await message.edit({
+      embeds: [streamerQueueEmbed(queue, guild)],
+      components: streamerQueueComponents(queue)
+    }).catch(() => {});
+  });
+}
 
-  maintenanceRunning = true;
+function cleanupExpiredState() {
+  const now = Date.now();
+  let changed = false;
 
-  try {
-    for (const guild of client.guilds.cache.values()) {
-      for (const queue of Object.values(db.queues)) {
-        if (!queue.channelId) continue;
-        if (queue.guildId && queue.guildId !== guild.id) continue;
-
-        await refreshQueueMessage(queue, guild);
-      }
-
-      if (
-        db.config.mediatorQueueChannelId &&
-        (!db.config.guildId || db.config.guildId === guild.id)
-      ) {
-        await updateMediatorQueueMessage(guild);
-      }
-
-      for (const queue of Object.values(db.streamerQueues || {})) {
-        if (!queue.channelId) continue;
-        if (queue.guildId && queue.guildId !== guild.id) continue;
-
-        await refreshStreamerQueueMessage(queue, guild);
-      }
+  for (const [id, bet] of Object.entries(db.bets || {})) {
+    const terminal = bet.status === "finished" || bet.status === "cancelled";
+    if (terminal && now - Number(bet.createdAt || now) > PERF.finishedBetRetentionMs) {
+      delete db.bets[id];
+      if (bet.guildId && bet.channelId) indexes.betByChannel.delete(`${bet.guildId}:${bet.channelId}`);
+      changed = true;
     }
-  } catch (error) {
-    console.error("❌ Erro na manutenção:", error);
-  } finally {
-    maintenanceRunning = false;
   }
-}, 300000);
+
+  for (const [id, ticket] of Object.entries(db.tickets || {})) {
+    if (ticket.status === "closed" && now - Number(ticket.closedAt || ticket.createdAt || now) > PERF.closedTicketRetentionMs) {
+      delete db.tickets[id];
+      if (ticket.guildId && ticket.creatorId) indexes.ticketByUser.delete(indexUserKey(ticket.guildId, ticket.creatorId));
+      if (ticket.guildId && ticket.channelId) indexes.ticketByChannel.delete(`${ticket.guildId}:${ticket.channelId}`);
+      changed = true;
+    }
+  }
+
+  for (const [id, analysis] of Object.entries(db.analyses || {})) {
+    if (analysis.status !== "pending" && now - Number(analysis.createdAt || now) > PERF.analysisRetentionMs) {
+      delete db.analyses[id];
+      changed = true;
+    }
+  }
+
+  if (changed) saveDatabase();
+}
+
+// Não percorremos todas as filas a cada poucos minutos.
+// As mensagens são atualizadas somente quando realmente mudam.
+setInterval(cleanupExpiredState, PERF.cleanupIntervalMs).unref?.();
 
 /* ========================================================
    SALVAMENTO E ERROS
@@ -3936,6 +4084,10 @@ async function shutdown(signal) {
   if (saveTimer) {
     clearTimeout(saveTimer);
     saveTimer = null;
+  }
+  if (saveMaxTimer) {
+    clearTimeout(saveMaxTimer);
+    saveMaxTimer = null;
   }
 
   savePending = true;
@@ -3971,4 +4123,3 @@ client.login(TOKEN).catch(error => {
   console.error("❌ Não foi possível iniciar o bot:", error);
   process.exit(1);
 });
-
