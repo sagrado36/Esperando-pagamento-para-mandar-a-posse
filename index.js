@@ -1181,35 +1181,48 @@ function memberIsTicketResponsible(member) {
   return ticketResponsibleRoleIds().some(roleId => member.roles.cache.has(roleId));
 }
 
-async function claimTicket(ticket, ticketChannel, userId, displayName, sourceInteraction = null) {
+async function claimTicket(ticket, ticketChannel, userId, displayName) {
   if (!ticket || ticket.status !== "open") {
     throw new Error("Este ticket não está mais aberto.");
+  }
+
+  if (!ticketChannel || !ticketChannel.isThread?.()) {
+    throw new Error("Este ticket não é uma thread válida.");
   }
 
   if (ticket.claimedBy && ticket.claimedBy !== userId) {
     throw new Error(`Este ticket já foi assumido por <@${ticket.claimedBy}>.`);
   }
 
-  // Em vez de buscar todos os membros do servidor, trabalhamos somente
-  // com os membros que realmente estão dentro da thread privada.
-  let threadMembers = ticketChannel.members?.cache;
-  if (ticketChannel.members?.fetch) {
-    threadMembers = await ticketChannel.members.fetch().catch(() => threadMembers);
+  // Quem clicou no botão já está dentro da thread, portanto não tentamos
+  // adicioná-lo novamente. Isso evita a falha que fazia o botão não assumir.
+  const botMember = ticketChannel.guild?.members?.me;
+  if (botMember && !botMember.permissions.has(PermissionFlagsBits.ManageThreads)) {
+    throw new Error("O bot precisa da permissão **Gerenciar Threads** no canal dos tickets.");
+  }
+
+  // Remove somente os outros responsáveis que estão nesta thread.
+  // O criador e quem assumiu permanecem com acesso.
+  let threadMembers;
+  try {
+    threadMembers = await ticketChannel.members.fetch();
+  } catch {
+    threadMembers = ticketChannel.members?.cache;
   }
 
   for (const member of threadMembers?.values?.() || []) {
     if (
-      memberIsTicketResponsible(member) &&
       member.id !== userId &&
-      member.id !== ticket.creatorId
+      member.id !== ticket.creatorId &&
+      memberIsTicketResponsible(member)
     ) {
-      await ticketChannel.members.remove(member.id).catch(() => {});
+      try {
+        await ticketChannel.members.remove(member.id, "Ticket assumido por outro responsável");
+      } catch (error) {
+        console.error(`❌ Não foi possível remover ${member.id} da thread:`, error);
+      }
     }
   }
-
-  await ticketChannel.members.add(userId).catch(error => {
-    throw new Error("Não foi possível assumir o ticket. Verifique se o bot possui a permissão **Gerenciar Threads**.");
-  });
 
   ticket.claimedBy = userId;
   ticket.claimedAt = Date.now();
@@ -1222,7 +1235,12 @@ async function claimTicket(ticket, ticketChannel, userId, displayName, sourceInt
     .slice(0, 82) || `usuario-${userId.slice(-5)}`;
 
   const newName = `🔧・RESOLVENDO・${cleanName}`.slice(0, 100);
-  await ticketChannel.setName(newName).catch(() => {});
+
+  try {
+    await ticketChannel.setName(newName, "Ticket assumido");
+  } catch (error) {
+    console.error("❌ Não foi possível alterar o nome do ticket:", error);
+  }
 
   await ticketChannel.send({
     content: `<@${userId}>`,
@@ -1230,7 +1248,7 @@ async function claimTicket(ticket, ticketChannel, userId, displayName, sourceInt
       `👤 **Responsável:** <@${userId}>`,
       "🔧 Este atendimento está sob sua responsabilidade."
     ].join("\n"))]
-  }).catch(() => {});
+  }).catch(error => console.error("❌ Não foi possível enviar a confirmação:", error));
 
   return newName;
 }
