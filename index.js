@@ -764,15 +764,15 @@ async function createPrivateBetChannel(guild, bet) {
     throw new Error("O Canal das Apostas ainda não foi configurado no /config.");
   }
 
-  // Cada aposta vira uma thread privada dentro do Canal das Apostas.
-  // Assim, cada aposta fica separada e somente os jogadores + Mediador
-  // responsável conseguem enxergá-la.
+  // As filas ficam como mensagens normais dentro do Canal das Apostas.
+  // Somente quando uma fila é PUXADA (2 jogadores formam uma partida),
+  // criamos um tópico/thread PRIVADO debaixo desse canal, no estilo dos tickets.
   const thread = await parent.threads.create({
-    name: `aposta-${bet.format}-${valueId(bet.value).replace(".", "-")}`.slice(0, 100),
+    name: `🎮・APOSTA・${bet.id.slice(-8)}`.slice(0, 100),
     type: ChannelType.PrivateThread,
     invitable: false,
     autoArchiveDuration: 10080,
-    reason: `Aposta ${bet.id}`
+    reason: `Partida puxada da fila - ${bet.id}`
   });
 
   for (const userId of bet.players) {
@@ -3309,26 +3309,22 @@ client.on("interactionCreate", async interaction => {
             for (const mode of modes) {
               const queue = getQueue(setup.format, setup.modality, value, mode);
               queue.parentChannelId = channel.id;
+              queue.channelId = channel.id;
               queue.guildId = interaction.guild.id;
 
-              let thread = queue.threadId
-                ? await interaction.guild.channels.fetch(queue.threadId).catch(() => null)
-                : null;
-
-              if (!thread || thread.type !== ChannelType.PublicThread) {
-                thread = await channel.threads.create({
-                  name: `fila-${queueTitle(queue).replace(/[^a-zA-Z0-9 -]/g, "").replace(/\s+/g, "-")}`.slice(0, 100),
-                  type: ChannelType.PublicThread,
-                  autoArchiveDuration: 10080,
-                  reason: `Fila ${queue.id}`
-                });
+              // Limpa a referência de tópicos antigos criados por versões anteriores.
+              // A fila em si NÃO cria tópico: ela permanece como mensagem no canal.
+              if (queue.threadId) {
+                const oldThread = await interaction.guild.channels.fetch(queue.threadId).catch(() => null);
+                if (oldThread?.isThread?.()) {
+                  await oldThread.setArchived(true, "Fila migrada para mensagem no canal").catch(() => {});
+                }
+                queue.threadId = null;
+                queue.messageId = null;
               }
 
-              queue.threadId = thread.id;
-              queue.channelId = thread.id;
-
               let message = queue.messageId
-                ? await thread.messages.fetch(queue.messageId).catch(() => null)
+                ? await channel.messages.fetch(queue.messageId).catch(() => null)
                 : null;
 
               const payload = {
@@ -3339,7 +3335,7 @@ client.on("interactionCreate", async interaction => {
               if (message) {
                 await message.edit(payload);
               } else {
-                message = await thread.send(payload);
+                message = await channel.send(payload);
                 queue.messageId = message.id;
               }
             }
@@ -4150,22 +4146,20 @@ client.on("interactionCreate", async interaction => {
         );
 
       queue.parentChannelId = channel.id;
+      queue.channelId = channel.id;
       queue.guildId = interaction.guild.id;
 
-      let thread = queue.threadId ? await interaction.guild.channels.fetch(queue.threadId).catch(() => null) : null;
-      if (!thread || thread.type !== ChannelType.PublicThread) {
-        thread = await channel.threads.create({
-          name: `fila-${queueTitle(queue).replace(/[^a-zA-Z0-9 -]/g, "").replace(/\s+/g, "-")}`.slice(0, 100),
-          type: ChannelType.PublicThread,
-          autoArchiveDuration: 10080,
-          reason: `Fila ${queue.id}`
-        });
+      // Não criar um tópico para cada valor. A fila é uma mensagem normal no canal.
+      if (queue.threadId) {
+        const oldThread = await interaction.guild.channels.fetch(queue.threadId).catch(() => null);
+        if (oldThread?.isThread?.()) {
+          await oldThread.setArchived(true, "Fila migrada para mensagem no canal").catch(() => {});
+        }
+        queue.threadId = null;
+        queue.messageId = null;
       }
 
-      queue.threadId = thread.id;
-      queue.channelId = thread.id;
-
-      const message = await thread.send({
+      const message = await channel.send({
         embeds: [
           makeEmbed(
             `🎮 FILA ${format}`,
