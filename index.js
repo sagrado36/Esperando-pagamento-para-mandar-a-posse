@@ -135,7 +135,9 @@ function createDefaultDatabase() {
       ticketPanelThumbnail: null,
       ticketPanelColor: null,
       ticketPanelFooter: "🎮 Sistema de Apostas",
-      mediatorQueueMessageId: null
+      mediatorQueueMessageId: null,
+      pixPanelChannelId: null,
+      pixPanelMessageId: null
     },
 
     pix: {},
@@ -568,9 +570,14 @@ async function mediatorQueueEmbed(guild) {
     lines.push("👤 **Nenhum Mediador na fila.**");
   } else {
     lines.push("👨‍⚖️ **Mediadores aguardando:**");
+    const mediatorMembers = await Promise.all(
+      db.mediatorQueue.map(userId =>
+        guild.members.fetch(userId).catch(() => null)
+      )
+    );
     for (let i = 0; i < db.mediatorQueue.length; i++) {
       const userId = db.mediatorQueue[i];
-      const member = await guild.members.fetch(userId).catch(() => null);
+      const member = mediatorMembers[i];
       const displayName = member?.displayName || member?.user?.username || "Mediador";
       lines.push(`**${i + 1}.** <@${userId}> — **${displayName}**`);
     }
@@ -691,15 +698,32 @@ async function renameBetThreadAfterConfirmation(guild, bet) {
 }
 
 function betEmbed(bet) {
-  return makeEmbed("🎮 APOSTA", [
-    `🎮 **${bet.format}** • ${modalityName(bet.modality)} • **${money(bet.value)}**`,
-    `🧊 **Modo:** ${bet.mode === "gelo_infinito" ? "Gelo Infinito" : "Gelo Normal"}`,
-    `👥 **Jogadores:**`,
-    bet.players.map((id, index) => `**${index + 1}.** <@${id}>`).join("\\n"),
-    `👨‍⚖️ **Mediador:** ${bet.mediatorId ? `<@${bet.mediatorId}>` : "_aguardando_"}`,
-    `✅ **Confirmações:** ${bet.confirmedBy.length}/${bet.players.length}`,
-    bet.confirmedBy.length === bet.players.length ? "🟢 **Confirmada.**" : "⏳ **Aguardando confirmação.**"
-  ].join("\\n"));
+  const confirmed = new Set(bet.confirmedBy || []);
+  const confirmationLines = bet.players.map((id, index) => {
+    const status = confirmed.has(id) ? "✅ Confirmado" : "⏳ Aguardando";
+    return `**${index + 1}.** <@${id}> — ${status}`;
+  }).join("\n");
+
+  return makeEmbed("🎮 CONFIRMAÇÃO DA APOSTA", [
+    `🎮 **Formato:** ${bet.format}`,
+    `📱 **Modalidade:** ${modalityName(bet.modality)}`,
+    `💰 **Valor:** ${money(bet.value)}`,
+    `🏆 **Prêmio:** ${money(Number(bet.value) * 2)}`,
+    "",
+    "👥 **Jogadores**",
+    confirmationLines,
+    "",
+    "📌 **Como funciona**",
+    "1️⃣ Confira o formato, modalidade e valor.",
+    "2️⃣ Cada jogador deve clicar em **Confirmar**.",
+    "3️⃣ O painel permanece no chat durante as confirmações.",
+    "4️⃣ Depois que os 2 confirmarem, os dados Pix serão enviados automaticamente.",
+    "5️⃣ O Mediador receberá acesso somente após as duas confirmações.",
+    "",
+    bet.confirmedBy.length === bet.players.length
+      ? "🟢 **Aposta confirmada pelos 2 jogadores.**"
+      : `⏳ **Aguardando:** ${bet.players.length - bet.confirmedBy.length} confirmação(ões).`
+  ].join("\n"));
 }
 
 function betButtons(betId) {
@@ -718,49 +742,65 @@ function mediatorPanelComponents(betId) {
         .addOptions([
           { label: "Escolher vencedor", value: "winner", emoji: "🏆" },
           { label: "Vitória por W.O.", value: "wo", emoji: "🚫" },
-          { label: "Enviar ID e senha", value: "room", emoji: "🎮" },
+          { label: "Identificar sala", value: "identify", emoji: "🔎" },
           { label: "Finalizar aposta", value: "finish", emoji: "🏁" }
         ])
     )
   ];
 }
 
+function getPaymentPix() {
+  const admins = Array.isArray(db.config.admins) ? db.config.admins : [];
+
+  // Prioridade: Pix de um ADM configurado.
+  for (const adminId of admins) {
+    if (db.pix?.[adminId]?.name && db.pix?.[adminId]?.key) {
+      return db.pix[adminId];
+    }
+  }
+
+  // Compatibilidade com bancos antigos: se ainda não houver Pix de ADM,
+  // usa o primeiro cadastro completo disponível.
+  const fallback = Object.values(db.pix || {}).find(
+    pix => pix?.name && pix?.key
+  );
+
+  return fallback || null;
+}
+
 function paymentMessage(bet) {
-  const entries = bet.mediatorId && db.pix[bet.mediatorId]
-    ? [[bet.mediatorId, db.pix[bet.mediatorId]]]
-    : Object.entries(db.pix);
+  const pix = getPaymentPix();
   const amountToPay = Number((Number(bet.value) + Number(db.config.fee || 0)).toFixed(2));
 
-  if (!entries.length) {
+  if (!pix) {
     return {
-      content: [
-        "💳 **PAGAMENTO DA APOSTA**",
-        "━━━━━━━━━━━━━━━━━━━━",
-        `💰 **Valor:** ${money(amountToPay)}`,
-        "",
-        "⚠️ **PIX não configurado.**",
-        "Um ADM deve configurar o Pix pelo `/painel cadastro`.",
-        "━━━━━━━━━━━━━━━━━━━━"
-      ].join("\n")
+      embeds: [
+        makeEmbed("💳 PAGAMENTO DA APOSTA", [
+          `💰 **Valor:** ${money(amountToPay)}`,
+          "",
+          "⚠️ **PIX DO ADM NÃO CONFIGURADO.**",
+          "Um ADM deve cadastrar o Pix pelo `/painel cadastro`."
+        ].join("\n"))
+      ]
     };
   }
 
-  const [, pix] = entries[0];
-  const content = [
-    "💳 **PAGAMENTO DA APOSTA**",
-    "━━━━━━━━━━━━━━━━━━━━",
+  const embed = makeEmbed("💳 PAGAMENTO DA APOSTA", [
     `💰 **Valor:** ${money(amountToPay)}`,
+    "",
     `👤 **Titular:** ${pix.name}`,
     `🔑 **Chave PIX:** \`${pix.key}\``,
-    pix.qr && validUrl(pix.qr)
-      ? `🔗 **Link do QR Code:** ${pix.qr}`
-      : "⚠️ **QR Code não cadastrado.**",
     "",
-    "📌 **Faça o pagamento e aguarde a orientação do Mediador.**",
-    "━━━━━━━━━━━━━━━━━━━━"
-  ].join("\n");
+    "📌 **Faça o pagamento e aguarde a orientação do Mediador.**"
+  ].join("\n"));
 
-  return { content };
+  if (pix.qr && validUrl(pix.qr)) {
+    embed.setImage(pix.qr);
+  }
+
+  return {
+    embeds: [embed]
+  };
 }
 
 async function createPrivateAnalysisChannel(guild, analysis) {
@@ -820,9 +860,9 @@ async function createPrivateBetChannel(guild, bet) {
     reason: `Partida puxada da fila - ${bet.id}`
   });
 
-  for (const userId of bet.players) {
-    await thread.members.add(userId).catch(() => {});
-  }
+  await Promise.all(
+    bet.players.map(userId => thread.members.add(userId).catch(() => {}))
+  );
 
   return thread;
 }
@@ -1258,19 +1298,23 @@ async function claimTicket(ticket, ticketChannel, userId, displayName) {
     }
   }
 
+  const removePromises = [];
   for (const member of threadMembers?.values?.() || []) {
     if (
       member.id !== userId &&
       member.id !== ticket.creatorId &&
       memberIsTicketResponsible(member)
     ) {
-      try {
-        await ticketChannel.members.remove(member.id, "Ticket assumido por outro responsável");
-      } catch (error) {
-        console.error(`❌ Não foi possível remover ${member.id} da thread:`, error);
-      }
+      removePromises.push(
+        ticketChannel.members
+          .remove(member.id, "Ticket assumido por outro responsável")
+          .catch(error => {
+            console.error(`❌ Não foi possível remover ${member.id} da thread:`, error);
+          })
+      );
     }
   }
+  await Promise.all(removePromises);
 
   ticket.claimedBy = userId;
   ticket.claimedAt = Date.now();
@@ -1350,21 +1394,21 @@ async function createTicketChannel(interaction, ticketType = "support") {
   const supportRoles = ticketResponsibleRoleIds();
   const responsibleRoleMentions = [...new Set(supportRoles)].map(roleId => `<@&${roleId}>`);
 
-  let members = guild.members.cache;
-  if (members.size < guild.memberCount) {
-    members = await guild.members.fetch().catch(() => guild.members.cache);
-  }
-
   const responsibleIds = new Set();
   for (const roleId of supportRoles) {
-    for (const member of members.values()) {
-      if (member.roles.cache.has(roleId)) responsibleIds.add(member.id);
+    const role = guild.roles.cache.get(roleId);
+    if (role?.members) {
+      for (const member of role.members.values()) {
+        responsibleIds.add(member.id);
+      }
     }
   }
 
-  for (const userId of responsibleIds) {
-    await thread.members.add(userId).catch(() => {});
-  }
+  await Promise.all(
+    [...responsibleIds].map(userId =>
+      thread.members.add(userId).catch(() => {})
+    )
+  );
 
   const ticket = {
     id: ticketId,
@@ -1651,8 +1695,13 @@ client.on("messageCreate", async message => {
 
   try {
     const command = message.content.trim().toLowerCase();
-    // Detecta ID + senha enviados juntos no formato: 12345678 00
-    const roomMatch = message.content.trim().match(/^(\\d{5,20})\\s+(\\S{1,30})$/);
+    // Identifica automaticamente a sala em formatos comuns:
+    // "12345678 1234", "ID: 12345678 Senha: 1234" ou "ID 12345678 SENHA 1234".
+    const roomText = message.content.trim();
+    const roomMatch =
+      roomText.match(/^(\d{5,20})\s+(\S{1,30})$/) ||
+      roomText.match(/(?:id|sala)\s*[:=-]?\s*(\d{5,20})[\s,;|]+(?:senha|pass|password)\s*[:=-]?\s*(\S{1,30})$/i) ||
+      roomText.match(/^(\d{5,20})[\s,;|]+(?:senha|pass|password)\s*[:=-]?\s*(\S{1,30})$/i);
 
     if (roomMatch) {
       const bet = Object.values(db.bets || {}).find(
@@ -1821,13 +1870,12 @@ client.on("messageCreate", async message => {
             [
               "**Central de controle desta aposta.**",
               "",
-              `🎮 **Formato:** ${bet.format}`,
-              `📱 **Modalidade:** ${modalityName(bet.modality)}`,
-              `💰 **Valor:** ${money(bet.value)}`,
-              `🏆 **Prêmio:** ${money(bet.value * 2)}`,
+              `🎮 **Formato:** ${bet.format} • ${modalityName(bet.modality)}`,
+              `💰 **Valor:** ${money(bet.value)} • 🏆 **Prêmio:** ${money(bet.value * 2)}`,
+              `👥 **Jogadores:** ${bet.players.map(id => `<@${id}>`).join(" • ")}`,
               "",
               "🛠️ **Ações disponíveis**",
-              "Escolha uma opção no menu abaixo para administrar a partida."
+              "Use o menu abaixo para escolher o vencedor, registrar W.O., identificar a sala ou finalizar a aposta."
             ].join("\n")
           )
         ],
@@ -1860,6 +1908,57 @@ client.on("messageCreate", async message => {
 });
 
 /* ========================================================
+   PAINEL PIX — ATUALIZAÇÃO AUTOMÁTICA
+======================================================== */
+
+function pixPanelPayload() {
+  const entries = Object.entries(db.pix || {});
+  const lines = [
+    "**CADASTRO DE PIX**",
+    "",
+    "Cada usuário pode cadastrar seu próprio Pix.",
+    "O nome cadastrado aparece automaticamente neste painel.",
+    "",
+    "👥 **Nomes cadastrados:**"
+  ];
+
+  if (!entries.length) {
+    lines.push("❌ Nenhum Pix cadastrado.");
+  } else {
+    for (const [userId, pix] of entries) {
+      lines.push(`• **${pix.name || "Sem nome"}** — <@${userId}>`);
+    }
+  }
+
+  return {
+    embeds: [makeEmbed("💳 PAINEL DE CADASTRO PIX", lines.join("\n"))],
+    components: [
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId("pix_register_self").setLabel("Cadastrar meu Pix").setEmoji("💳").setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId("pix_configure").setLabel("Configurar Pix").setEmoji("⚙️").setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId("pix_edit").setLabel("Editar Pix").setEmoji("✏️").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId("pix_remove").setLabel("Remover Cadastro").setEmoji("🗑️").setStyle(ButtonStyle.Danger)
+      )
+    ]
+  };
+}
+
+async function refreshPixPanel(guild) {
+  const channelId = db.config.pixPanelChannelId;
+  const messageId = db.config.pixPanelMessageId;
+  if (!guild || !channelId || !messageId) return false;
+
+  const channel = await guild.channels.fetch(channelId).catch(() => null);
+  if (!channel?.isTextBased?.()) return false;
+
+  const message = await channel.messages.fetch(messageId).catch(() => null);
+  if (!message) return false;
+
+  await message.edit(pixPanelPayload()).catch(() => null);
+  return true;
+}
+
+/* ========================================================
    INTERAÇÕES
 ======================================================== */
 
@@ -1870,36 +1969,15 @@ client.on("interactionCreate", async interaction => {
     ---------------------------------------------------- */
 
     if (interaction.isChatInputCommand() && interaction.commandName === "painel" && interaction.options.getSubcommand() === "cadastro") {
-      const entries = Object.entries(db.pix || {});
-      const lines = [
-        "**CADASTRO DE PIX**",
-        "",
-        "Qualquer usuário pode cadastrar seu próprio Pix.",
-        "**Configurar/editar/remover cadastros é permitido apenas aos Mediadores.**",
-        "",
-        "👥 **Nomes cadastrados:**"
-      ];
-
-      if (!entries.length) {
-        lines.push("❌ Nenhum Pix cadastrado.");
-      } else {
-        for (const [userId, pix] of entries) {
-          lines.push(`• **${pix.name || "Sem nome"}** — <@${userId}>`);
-        }
-      }
-
-      const embed = makeEmbed("💳 PAINEL DE CADASTRO PIX", lines.join("\n"));
-      return interaction.reply({
-        embeds: [embed],
-        components: [
-          new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId("pix_register_self").setLabel("Cadastrar meu Pix").setEmoji("💳").setStyle(ButtonStyle.Primary),
-            new ButtonBuilder().setCustomId("pix_configure").setLabel("Configurar Pix").setEmoji("⚙️").setStyle(ButtonStyle.Success),
-            new ButtonBuilder().setCustomId("pix_edit").setLabel("Editar Pix").setEmoji("✏️").setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId("pix_remove").setLabel("Remover Cadastro").setEmoji("🗑️").setStyle(ButtonStyle.Danger)
-          )
-        ]
+      const reply = await interaction.reply({
+        ...pixPanelPayload(),
+        fetchReply: true
       });
+
+      db.config.pixPanelChannelId = interaction.channelId;
+      db.config.pixPanelMessageId = reply.id;
+      saveDatabase();
+      return;
     }
 
     if (interaction.isChatInputCommand()) {
@@ -3037,49 +3115,6 @@ client.on("interactionCreate", async interaction => {
         return;
       }
 
-      if (action === "room_credentials") {
-        if (!(await requireMediator(interaction))) return;
-
-        const bet = db.bets[parts[0]];
-
-        if (!bet) {
-          return deny(interaction, "❌ Aposta não encontrada.");
-        }
-
-        if (bet.mediatorId && bet.mediatorId !== interaction.user.id) {
-          return deny(
-            interaction,
-            "❌ Você não é o Mediador responsável."
-          );
-        }
-
-        if (bet.confirmedBy.length < bet.players.length) return deny(interaction, "🔒 Aguarde os 2 jogadores confirmarem.");
-
-        const modal = new ModalBuilder()
-          .setCustomId(`room_modal|${bet.id}`)
-          .setTitle("Sala Free Fire");
-
-        modal.addComponents(
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder()
-              .setCustomId("room_id")
-              .setLabel("ID da sala")
-              .setPlaceholder("ID")
-              .setStyle(TextInputStyle.Short)
-              .setRequired(true)
-          ),
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder()
-              .setCustomId("room_password")
-              .setLabel("Senha da sala")
-              .setPlaceholder("Senha")
-              .setStyle(TextInputStyle.Short)
-              .setRequired(true)
-          )
-        );
-
-        return interaction.showModal(modal);
-      }
 
       if (action === "room_copy_id" || action === "room_copy_password") {
         const bet = db.bets[parts[0]];
@@ -3128,12 +3163,6 @@ client.on("interactionCreate", async interaction => {
     }
 
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith("aux_panel|")) {
-      // Confirma o clique imediatamente para evitar "não respondeu a tempo".
-      // Todas as consultas e alterações do ticket acontecem depois do ACK.
-      if (!interaction.deferred && !interaction.replied) {
-        await interaction.deferUpdate().catch(() => {});
-      }
-
       const ticketId = interaction.customId.split("|")[1];
       const ticket = db.tickets?.[ticketId];
 
@@ -3150,19 +3179,24 @@ client.on("interactionCreate", async interaction => {
         ? await ticketGuild.members.fetch(interaction.user.id).catch(() => null)
         : null;
 
-      const hasSupportRole = memberIsTicketResponsible(ticketMember);
-
-      if (!hasSupportRole) {
+      if (!memberIsTicketResponsible(ticketMember)) {
         return deny(interaction, "❌ Apenas os cargos responsáveis pelos tickets podem usar este painel.");
       }
 
-      const ticketChannel = ticketGuild ? await ticketGuild.channels.fetch(ticket.channelId).catch(() => null) : null;
-      if (!ticketChannel) return deny(interaction, "❌ O canal deste ticket não foi encontrado.");
+      const ticketChannel = ticketGuild
+        ? await ticketGuild.channels.fetch(ticket.channelId).catch(() => null)
+        : null;
+
+      if (!ticketChannel) {
+        return deny(interaction, "❌ O canal deste ticket não foi encontrado.");
+      }
 
       const action = interaction.values[0];
 
       if (action === "claim") {
         try {
+          await interaction.deferUpdate();
+
           const displayName =
             ticketMember?.displayName ||
             interaction.user.globalName ||
@@ -3171,51 +3205,68 @@ client.on("interactionCreate", async interaction => {
           await claimTicket(ticket, ticketChannel, interaction.user.id, displayName);
 
           return interaction.editReply({
-            content: `✅ Você assumiu este ticket.`,
+            content: "✅ Você assumiu este ticket. Os demais responsáveis perderam o acesso ao atendimento.",
             embeds: [],
             components: ticketPanelComponents(ticket.id, interaction.user.id)
           });
         } catch (error) {
           console.error("❌ Erro ao assumir ticket pelo painel:", error);
-          return interaction.editReply({
-            content: `❌ ${error.message || "Não foi possível assumir o ticket."}`,
-            embeds: [],
-            components: ticketPanelComponents(ticket.id, ticket.claimedBy || null)
-          }).catch(() => {});
+          if (interaction.deferred || interaction.replied) {
+            return interaction.editReply({
+              content: `❌ ${error.message || "Não foi possível assumir o ticket."}`,
+              embeds: [],
+              components: ticketPanelComponents(ticket.id, ticket.claimedBy || null)
+            }).catch(() => {});
+          }
+          return deny(interaction, `❌ ${error.message || "Não foi possível assumir o ticket."}`);
         }
       }
 
       if (action === "finish") {
+        await interaction.deferUpdate();
+
         ticket.status = "closed";
         ticket.closedBy = interaction.user.id;
         ticket.closedAt = Date.now();
         saveDatabase();
 
-        await interaction.reply({
-          embeds: [makeEmbed("🏁 TICKET FINALIZADO", [
-            `🎫 **Ticket:** <#${ticket.channelId}>`,
-            `👤 **Finalizado por:** <@${interaction.user.id}>`,
-            "",
-            "Este canal será fechado em alguns segundos."
-          ].join("\\n"))]
+        await interaction.editReply({
+          content: "🏁 **Ticket finalizado.** Este atendimento será encerrado.",
+          embeds: [],
+          components: []
         }).catch(() => {});
 
         setTimeout(() => {
           ticketChannel?.delete("Ticket finalizado pelo suporte").catch(() => {});
         }, 3000);
-
         return;
       }
 
       if (action === "rename") {
-        const modal = new ModalBuilder().setCustomId(`ticket_rename|${ticket.id}`).setTitle("Mudar nome do canal");
-        modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("channel_name").setLabel("Novo nome do canal").setPlaceholder("Ex.: suporte-jogador").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(90)));
+        // Não fazer deferUpdate aqui: showModal exige uma interação ainda não respondida.
+        const modal = new ModalBuilder()
+          .setCustomId(`ticket_rename|${ticket.id}`)
+          .setTitle("Mudar nome do canal");
+
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("channel_name")
+              .setLabel("Novo nome do canal")
+              .setPlaceholder("Ex.: suporte-jogador")
+              .setStyle(TextInputStyle.Short)
+              .setRequired(true)
+              .setMaxLength(90)
+          )
+        );
+
         return interaction.showModal(modal);
       }
 
       if (action === "add") {
+        // Também não responder/defer aqui: o próximo passo é outro select de usuário.
         return interaction.reply({
-          content: "👤 Selecione o membro que deseja adicionar ao ticket:",
+          content: "👤 **Selecione o membro que deseja adicionar ao ticket:**",
           components: [
             new ActionRowBuilder().addComponents(
               new UserSelectMenuBuilder()
@@ -3228,6 +3279,8 @@ client.on("interactionCreate", async interaction => {
           flags: MessageFlags.Ephemeral
         });
       }
+
+      return deny(interaction, "❌ Ação do painel não reconhecida.");
     }
 
     /* ----------------------------------------------------
@@ -3278,7 +3331,7 @@ client.on("interactionCreate", async interaction => {
           embeds: [makeEmbed("👤 MEMBRO ADICIONADO", [
             `**${member}** foi adicionado ao ticket.`,
             `🛠️ **Adicionado por:** <@${interaction.user.id}>`
-          ].join("\\n"))]
+          ].join("\n"))]
         }).catch(() => {});
 
         return interaction.update({
@@ -3697,86 +3750,18 @@ client.on("interactionCreate", async interaction => {
         });
       }
 
-      /* SALA FREE FIRE */
-      if (interaction.customId.startsWith("room_modal|")) {
-        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-        if (!(await requireMediator(interaction))) return;
-
-        const betId = interaction.customId.split("|")[1];
-        const bet = db.bets[betId];
-
-        if (!bet) {
-          return deny(interaction, "❌ Aposta não encontrada.");
-        }
-
-        if (bet.mediatorId && bet.mediatorId !== interaction.user.id) {
-          return deny(interaction, "❌ Você não é o Mediador responsável.");
-        }
-
-        const roomId =
-          interaction.fields.getTextInputValue("room_id").trim();
-
-        const roomPassword =
-          interaction.fields.getTextInputValue("room_password").trim();
-
-        if (!roomId || !roomPassword) {
-          return deny(interaction, "❌ Informe o ID e a senha da sala.");
-        }
-
-        bet.roomId = roomId;
-        bet.roomPassword = roomPassword;
-
-        const paymentValue = Number((bet.value * 2).toFixed(2));
-        const paymentLabel = paymentValue.toFixed(2).replace(".", "-");
-
-        const channel = interaction.channel;
-
-        if (channel && channel.isTextBased() && "setName" in channel) {
-          await channel.setName(`pagar-${paymentLabel}`).catch(error => {
-            console.error("❌ Não foi possível renomear o canal:", error);
-          });
-        }
-
-        saveDatabase();
-
-        const embed = makeEmbed(
-          "🎮 SALA FREE FIRE",
-          [
-            "**Dados da sala liberados pelo Mediador.**",
-            "",
-            `💰 **Valor da aposta:** ${money(bet.value)}`,
-            `🏆 **Prêmio ao vencedor:** ${money(paymentValue)}`,
-            "",
-            "🎮 **ACESSO À SALA**",
-            `🆔 **ID:** \`${roomId}\``,
-            `🔐 **Senha:** \`${roomPassword}\``,
-            "",
-            `📌 **Canal de pagamento:** \`pagar-${paymentLabel}\``
-          ].join("\n")
-        );
-
-        return interaction.editReply({
-          embeds: [embed],
-          components: [
-            new ActionRowBuilder().addComponents(
-              new ButtonBuilder()
-                .setCustomId(`room_copy_id|${bet.id}`)
-                .setLabel("Copiar ID")
-                .setEmoji("🆔")
-                .setStyle(ButtonStyle.Secondary),
-              new ButtonBuilder()
-                .setCustomId(`room_copy_password|${bet.id}`)
-                .setLabel("Copiar senha")
-                .setEmoji("🔐")
-                .setStyle(ButtonStyle.Secondary)
-            )
-          ]
-        });
-      }
 
       /* PIX CADASTRO PELO PAINEL */
       if (interaction.customId === "pix_register_panel") {
-        if (!(await requireAdmin(interaction))) return;
+        const isPrivilegedConfiguration =
+          adminCheck(interaction) || mediatorCheck(interaction);
+
+        // Cadastro próprio: qualquer usuário pode cadastrar/editar o próprio Pix.
+        // Configuração administrativa: continua restrita a ADM/Mediador.
+        if (!isPrivilegedConfiguration && !interaction.message) {
+          // Modal aberto pelo botão "Cadastrar meu Pix" não possui message na submissão;
+          // a permissão de cadastro próprio é validada pelo próprio ID abaixo.
+        }
 
         const name = interaction.fields.getTextInputValue("pix_name").trim();
         const key = interaction.fields.getTextInputValue("pix_key").trim();
@@ -3796,15 +3781,19 @@ client.on("interactionCreate", async interaction => {
 
         saveDatabase();
 
+        // Atualiza automaticamente o painel de Cadastro Pix que foi publicado
+        // pelo /painel cadastro, sem exigir que alguém execute o comando novamente.
+        await refreshPixPanel(interaction.guild).catch(() => {});
+
         const e = makeEmbed("💳 CADASTRO PIX", [
-          "**Cadastro realizado com sucesso.**",
+          "✅ **Cadastro realizado com sucesso.**",
           "",
           `👤 **Titular:** ${name}`,
           `🔑 **Chave Pix:** \`${key}\``,
+          `🪪 **Discord:** <@${interaction.user.id}>`,
           "",
           "🧾 **QR Code:** gerado automaticamente.",
-          "",
-          "✅ Os dados já estão prontos para serem usados nas apostas."
+          "📌 O nome já foi marcado no painel de Cadastro Pix."
         ].join("\n"));
 
         e.setImage(qr);
@@ -4171,13 +4160,19 @@ client.on("interactionCreate", async interaction => {
           flags: MessageFlags.Ephemeral
         });
       }
-      if (choice === "room") {
-        const modal = new ModalBuilder().setCustomId(`room_modal|${bet.id}`).setTitle("Sala Free Fire");
-        modal.addComponents(
-          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("room_id").setLabel("ID da sala").setPlaceholder("ID").setStyle(TextInputStyle.Short).setRequired(true)),
-          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("room_password").setLabel("Senha da sala").setPlaceholder("Senha").setStyle(TextInputStyle.Short).setRequired(true))
-        );
-        return interaction.showModal(modal);
+      if (choice === "identify") {
+        return interaction.reply({
+          content: [
+            "🔎 **IDENTIFICAÇÃO DA SALA**",
+            "",
+            "Envie no chat, em uma única mensagem:",
+            "`ID_DA_SALA SENHA_DA_SALA`",
+            "",
+            "🤖 O bot identificará automaticamente os dados, salvará no sistema e publicará a identificação da sala.",
+            "⚡ Não é necessário preencher outro formulário."
+          ].join("\n"),
+          flags: MessageFlags.Ephemeral
+        });
       }
       if (choice === "finish") {
         bet.status = "finished";
