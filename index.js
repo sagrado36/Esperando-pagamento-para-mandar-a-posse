@@ -1130,18 +1130,16 @@ function ticketCreationPanelEmbed() {
 function ticketPanelComponents(ticketId, claimedBy = null) {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`ticket_claim|${ticketId}`)
-        .setLabel(claimedBy ? "Ticket assumido" : "Assumir Ticket")
-        .setEmoji(claimedBy ? "✅" : "👤")
-        .setStyle(claimedBy ? ButtonStyle.Secondary : ButtonStyle.Success)
-        .setDisabled(Boolean(claimedBy))
-    ),
-    new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId(`aux_panel|${ticketId}`)
         .setPlaceholder("Painel do Ticket")
         .addOptions([
+          {
+            label: claimedBy ? "Ticket já assumido" : "Assumir Ticket",
+            value: "claim",
+            emoji: claimedBy ? "✅" : "👤",
+            description: claimedBy ? "Este ticket já possui um responsável." : "Assuma este ticket como responsável."
+          },
           { label: "Finalizar ticket", value: "finish", emoji: "🏁", description: "Finaliza este atendimento." },
           { label: "Adicionar membro", value: "add", emoji: "➕", description: "Adiciona um membro ao ticket." },
           { label: "Mudar nome do canal", value: "rename", emoji: "✏️", description: "Altera o nome deste ticket." }
@@ -3052,49 +3050,13 @@ client.on("interactionCreate", async interaction => {
       }
     }
 
-    if (interaction.isButton() && interaction.customId.startsWith("ticket_claim|")) {
-      // Responde IMEDIATAMENTE à interação. O Discord só dá alguns segundos
-      // para confirmar o clique; a remoção dos outros responsáveis e a
-      // alteração do nome da thread podem levar mais tempo.
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith("aux_panel|")) {
+      // Confirma o clique imediatamente para evitar "não respondeu a tempo".
+      // Todas as consultas e alterações do ticket acontecem depois do ACK.
       if (!interaction.deferred && !interaction.replied) {
         await interaction.deferUpdate().catch(() => {});
       }
 
-      if (!(await requireSupport(interaction))) return;
-
-      const ticketId = interaction.customId.split("|")[1];
-      const ticket = db.tickets?.[ticketId];
-
-      if (
-        !ticket ||
-        ticket.guildId !== interaction.guild?.id ||
-        ticket.channelId !== interaction.channel?.id ||
-        ticket.status !== "open"
-      ) {
-        return deny(interaction, "❌ Este ticket não está mais aberto.");
-      }
-
-      try {
-        const displayName =
-          interaction.member?.displayName ||
-          interaction.user.globalName ||
-          interaction.user.username;
-
-        await claimTicket(ticket, interaction.channel, interaction.user.id, displayName);
-
-        return interaction.editReply({
-          components: ticketPanelComponents(ticket.id, interaction.user.id)
-        }).catch(() => {});
-      } catch (error) {
-        console.error("❌ Erro ao assumir ticket:", error);
-        return interaction.followUp({
-          content: `❌ ${error.message || "Não foi possível assumir o ticket."}`,
-          flags: MessageFlags.Ephemeral
-        }).catch(() => {});
-      }
-    }
-
-    if (interaction.isStringSelectMenu() && interaction.customId.startsWith("aux_panel|")) {
       const ticketId = interaction.customId.split("|")[1];
       const ticket = db.tickets?.[ticketId];
 
@@ -3131,14 +3093,18 @@ client.on("interactionCreate", async interaction => {
 
           await claimTicket(ticket, ticketChannel, interaction.user.id, displayName);
 
-          return interaction.update({
+          return interaction.editReply({
             content: `✅ Você assumiu este ticket.`,
             embeds: [],
-            components: []
+            components: ticketPanelComponents(ticket.id, interaction.user.id)
           });
         } catch (error) {
           console.error("❌ Erro ao assumir ticket pelo painel:", error);
-          return deny(interaction, `❌ ${error.message || "Não foi possível assumir o ticket."}`);
+          return interaction.editReply({
+            content: `❌ ${error.message || "Não foi possível assumir o ticket."}`,
+            embeds: [],
+            components: ticketPanelComponents(ticket.id, ticket.claimedBy || null)
+          }).catch(() => {});
         }
       }
 
