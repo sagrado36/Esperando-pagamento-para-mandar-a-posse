@@ -1203,11 +1203,16 @@ async function claimTicket(ticket, ticketChannel, userId, displayName) {
 
   // Remove somente os outros responsáveis que estão nesta thread.
   // O criador e quem assumiu permanecem com acesso.
-  let threadMembers;
-  try {
-    threadMembers = await ticketChannel.members.fetch();
-  } catch {
-    threadMembers = ticketChannel.members?.cache;
+  // A cache já contém os membros da thread na maioria dos casos.
+  // Só faz uma chamada à API se a cache estiver vazia, reduzindo bastante
+  // o tempo de resposta do botão.
+  let threadMembers = ticketChannel.members?.cache;
+  if (!threadMembers?.size) {
+    try {
+      threadMembers = await ticketChannel.members.fetch();
+    } catch {
+      threadMembers = ticketChannel.members?.cache;
+    }
   }
 
   for (const member of threadMembers?.values?.() || []) {
@@ -3048,6 +3053,13 @@ client.on("interactionCreate", async interaction => {
     }
 
     if (interaction.isButton() && interaction.customId.startsWith("ticket_claim|")) {
+      // Responde IMEDIATAMENTE à interação. O Discord só dá alguns segundos
+      // para confirmar o clique; a remoção dos outros responsáveis e a
+      // alteração do nome da thread podem levar mais tempo.
+      if (!interaction.deferred && !interaction.replied) {
+        await interaction.deferUpdate().catch(() => {});
+      }
+
       if (!(await requireSupport(interaction))) return;
 
       const ticketId = interaction.customId.split("|")[1];
@@ -3070,12 +3082,15 @@ client.on("interactionCreate", async interaction => {
 
         await claimTicket(ticket, interaction.channel, interaction.user.id, displayName);
 
-        return interaction.update({
+        return interaction.editReply({
           components: ticketPanelComponents(ticket.id, interaction.user.id)
-        });
+        }).catch(() => {});
       } catch (error) {
         console.error("❌ Erro ao assumir ticket:", error);
-        return deny(interaction, `❌ ${error.message || "Não foi possível assumir o ticket."}`);
+        return interaction.followUp({
+          content: `❌ ${error.message || "Não foi possível assumir o ticket."}`,
+          flags: MessageFlags.Ephemeral
+        }).catch(() => {});
       }
     }
 
