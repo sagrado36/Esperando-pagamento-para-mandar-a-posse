@@ -561,12 +561,24 @@ function queueOneVsOneModeComponents(format, modality, value, channelId) {
   ];
 }
 
-function mediatorQueueEmbed() {
-  // Não usamos título vazio: o Discord pode rejeitar embeds com title="".
-  // O visual continua exatamente como a fila atual, com "FILA MEDIADORES" em destaque.
+async function mediatorQueueEmbed(guild) {
+  const lines = ["**FILA MEDIADORES**", ""];
+
+  if (!db.mediatorQueue?.length) {
+    lines.push("👤 **Nenhum Mediador na fila.**");
+  } else {
+    lines.push("👨‍⚖️ **Mediadores aguardando:**");
+    for (let i = 0; i < db.mediatorQueue.length; i++) {
+      const userId = db.mediatorQueue[i];
+      const member = await guild.members.fetch(userId).catch(() => null);
+      const displayName = member?.displayName || member?.user?.username || "Mediador";
+      lines.push(`**${i + 1}.** <@${userId}> — **${displayName}**`);
+    }
+  }
+
   return new EmbedBuilder()
     .setColor(db.config.embedColor || "#5865F2")
-    .setDescription("**FILA MEDIADORES**")
+    .setDescription(lines.join("\n"))
     .setFooter({ text: "🎮 Sistema de Apostas" });
 }
 
@@ -615,7 +627,7 @@ async function updateMediatorQueueMessage(guild) {
     }
 
     const payload = {
-      embeds: [mediatorQueueEmbed()],
+      embeds: [await mediatorQueueEmbed(guild)],
       components: safeMediatorQueueComponents()
     };
 
@@ -748,15 +760,7 @@ function paymentMessage(bet) {
     "━━━━━━━━━━━━━━━━━━━━"
   ].join("\n");
 
-  const result = { content };
-
-  // O pagamento fica em mensagem normal. O QR aparece separadamente
-  // apenas como imagem, sem colocar os dados de pagamento em embed.
-  if (pix.qr && validUrl(pix.qr)) {
-    result.embeds = [new EmbedBuilder().setImage(pix.qr).setColor(db.config.embedColor || "#5865F2")];
-  }
-
-  return result;
+  return { content };
 }
 
 async function createPrivateAnalysisChannel(guild, analysis) {
@@ -1867,24 +1871,34 @@ client.on("interactionCreate", async interaction => {
 
     if (interaction.isChatInputCommand() && interaction.commandName === "painel" && interaction.options.getSubcommand() === "cadastro") {
       const entries = Object.entries(db.pix || {});
-      const pix = entries.length ? entries[0][1] : null;
-      const embed = makeEmbed("💳 PAINEL DE CADASTRO PIX", [
-        "Configure os dados Pix que serão usados nas apostas.",
+      const lines = [
+        "**CADASTRO DE PIX**",
         "",
-        `👤 **Titular:** ${pix?.name || "❌ Não configurado"}`,
-        `🔑 **Chave Pix:** ${pix?.key ? `\`${pix.key}\`` : "❌ Não configurada"}`,
-        `🧾 **QR Code:** ${pix?.qr ? "✅ Gerado automaticamente" : "❌ Não configurado"}`
-      ].join("\n"));
-      if (pix?.qr && validUrl(pix.qr)) embed.setImage(pix.qr);
+        "Qualquer usuário pode cadastrar seu próprio Pix.",
+        "**Configurar/editar/remover cadastros é permitido apenas aos Mediadores.**",
+        "",
+        "👥 **Nomes cadastrados:**"
+      ];
+
+      if (!entries.length) {
+        lines.push("❌ Nenhum Pix cadastrado.");
+      } else {
+        for (const [userId, pix] of entries) {
+          lines.push(`• **${pix.name || "Sem nome"}** — <@${userId}>`);
+        }
+      }
+
+      const embed = makeEmbed("💳 PAINEL DE CADASTRO PIX", lines.join("\n"));
       return interaction.reply({
         embeds: [embed],
         components: [
           new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId("pix_register_self").setLabel("Cadastrar meu Pix").setEmoji("💳").setStyle(ButtonStyle.Primary),
             new ButtonBuilder().setCustomId("pix_configure").setLabel("Configurar Pix").setEmoji("⚙️").setStyle(ButtonStyle.Success),
-            new ButtonBuilder().setCustomId("pix_edit").setLabel("Editar Pix").setEmoji("✏️").setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId("pix_edit").setLabel("Editar Pix").setEmoji("✏️").setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId("pix_remove").setLabel("Remover Cadastro").setEmoji("🗑️").setStyle(ButtonStyle.Danger)
           )
-        ],
+        ]
       });
     }
 
@@ -2065,20 +2079,40 @@ client.on("interactionCreate", async interaction => {
     ---------------------------------------------------- */
 
     if (interaction.isButton()) {
-      if (["pix_configure", "pix_edit"].includes(interaction.customId)) {
-        if (!(await requireAdmin(interaction))) return;
-        const current = Object.values(db.pix || {})[0] || {};
+      if (interaction.customId === "pix_register_self") {
+        const current = db.pix?.[interaction.user.id] || {};
         const modal = new ModalBuilder()
           .setCustomId("pix_register_panel")
-          .setTitle(interaction.customId === "pix_edit" ? "Editar Pix" : "Configurar Pix");
+          .setTitle(current.name ? "Editar meu Pix" : "Cadastrar meu Pix");
         modal.addComponents(
           new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("pix_name").setLabel("Nome do titular").setPlaceholder("Ex.: João da Silva").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(100).setValue(current.name || "")),
           new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("pix_key").setLabel("Chave Pix").setPlaceholder("CPF, CNPJ, e-mail, telefone ou chave aleatória").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(200).setValue(current.key || ""))
         );
         return interaction.showModal(modal);
       }
+      if (["pix_configure", "pix_edit"].includes(interaction.customId)) {
+        if (!(await requireMediator(interaction))) return;
+        const current = db.pix?.[interaction.user.id] || {};
+        const modal = new ModalBuilder()
+          .setCustomId("pix_register_panel")
+          .setTitle(interaction.customId === "pix_edit" ? "Editar Pix" : "Configurar Pix");
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("pix_name").setLabel("Nome do titular").setPlaceholder("Ex.: Gustavo Mendanha").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(100).setValue(current.name || "")),
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("pix_key").setLabel("Chave Pix").setPlaceholder("CPF, CNPJ, e-mail, telefone ou chave aleatória").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(200).setValue(current.key || ""))
+        );
+        return interaction.showModal(modal);
+      }
       if (interaction.customId === "pix_remove") {
-        if (!(await requireAdmin(interaction))) return;
+        if (!(await requireMediator(interaction))) return;
+        delete db.pix[interaction.user.id];
+        saveDatabase();
+        return interaction.update({
+          embeds: [makeEmbed("💳 CADASTRO PIX", "🗑️ **Seu cadastro Pix foi removido.**")],
+          components: []
+        });
+      }
+      if (interaction.customId === "pix_remove_old") {
+        if (!(await requireMediator(interaction))) return;
         db.pix = {};
         saveDatabase();
         return interaction.update({
@@ -2687,25 +2721,24 @@ client.on("interactionCreate", async interaction => {
 
       /* FILA MEDIADORES */
       if (action === "mediator_join") {
-        // Acknowledge the button immediately so Discord does not expire the interaction
-        // while the queue message/database is being updated.
-        await interaction.deferUpdate();
         if (!(await requireMediator(interaction))) return;
+        await interaction.deferUpdate();
 
         if (!db.mediatorQueue.includes(interaction.user.id)) {
           db.mediatorQueue.push(interaction.user.id);
         }
 
         saveDatabase();
-        await updateMediatorQueueMessage(interaction.guild);
-
+        const result = await updateMediatorQueueMessage(interaction.guild);
+        if (!result.ok) {
+          return interaction.followUp({ content: `❌ ${result.error}`, flags: MessageFlags.Ephemeral }).catch(() => {});
+        }
         return;
       }
 
       if (action === "mediator_leave") {
-        // Acknowledge immediately for the same reason as the Entrar button.
-        await interaction.deferUpdate();
         if (!(await requireMediator(interaction))) return;
+        await interaction.deferUpdate();
 
         db.mediatorQueue = db.mediatorQueue.filter(
           id => id !== interaction.user.id
@@ -2718,8 +2751,10 @@ client.on("interactionCreate", async interaction => {
         }
 
         saveDatabase();
-        await updateMediatorQueueMessage(interaction.guild);
-
+        const result = await updateMediatorQueueMessage(interaction.guild);
+        if (!result.ok) {
+          return interaction.followUp({ content: `❌ ${result.error}`, flags: MessageFlags.Ephemeral }).catch(() => {});
+        }
         return;
       }
 
@@ -3751,13 +3786,12 @@ client.on("interactionCreate", async interaction => {
         }
 
         const qr = createPixQrUrl(name, key);
-        db.pix = {
-          [interaction.user.id]: {
-            name,
-            key,
-            qr,
-            updatedAt: Date.now()
-          }
+        db.pix = db.pix || {};
+        db.pix[interaction.user.id] = {
+          name,
+          key,
+          qr,
+          updatedAt: Date.now()
         };
 
         saveDatabase();
