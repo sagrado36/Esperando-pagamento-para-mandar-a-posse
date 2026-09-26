@@ -92,6 +92,8 @@ if (!CLIENT_ID) {
 
 const DATA_DIR = path.join(__dirname, "data");
 const DATA_FILE = path.join(DATA_DIR, "database.json");
+const DATA_BACKUP_FILE = path.join(DATA_DIR, "database.backup.json");
+const DATA_TMP_FILE = path.join(DATA_DIR, "database.json.tmp");
 
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -164,21 +166,40 @@ function createDefaultDatabase() {
 }
 
 function loadDatabase() {
-  if (!fs.existsSync(DATA_FILE)) {
-    const fresh = createDefaultDatabase();
-    fs.writeFileSync(DATA_FILE, JSON.stringify(fresh, null, 2));
-    return fresh;
+  const readValid = file => {
+    try {
+      if (!fs.existsSync(file)) return null;
+      const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+      if (!parsed || typeof parsed !== "object") return null;
+      return mergeDefaults(createDefaultDatabase(), parsed);
+    } catch (error) {
+      console.error(`⚠️ Não foi possível ler ${file}:`, error?.message || error);
+      return null;
+    }
+  };
+
+  const primary = readValid(DATA_FILE);
+  if (primary) return primary;
+
+  const backup = readValid(DATA_BACKUP_FILE);
+  if (backup) {
+    console.warn("⚠️ database.json estava inválido. Restaurando o backup automático.");
+    try {
+      fs.copyFileSync(DATA_BACKUP_FILE, DATA_FILE);
+    } catch (error) {
+      console.error("❌ Não foi possível restaurar o backup:", error);
+    }
+    return backup;
   }
 
+  console.warn("⚠️ Nenhum banco válido encontrado. Criando um banco novo.");
+  const fresh = createDefaultDatabase();
   try {
-    const parsed = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
-    return mergeDefaults(createDefaultDatabase(), parsed);
+    fs.writeFileSync(DATA_FILE, JSON.stringify(fresh, null, 2), "utf8");
   } catch (error) {
-    console.error("⚠️ Banco inválido. Criando novo banco.", error);
-    const fresh = createDefaultDatabase();
-    fs.writeFileSync(DATA_FILE, JSON.stringify(fresh, null, 2));
-    return fresh;
+    console.error("❌ Não foi possível criar o banco:", error);
   }
+  return fresh;
 }
 
 function mergeDefaults(base, data) {
@@ -217,9 +238,20 @@ async function flushDatabase() {
 
   try {
     const data = JSON.stringify(db, null, 2);
-    const tempFile = `${DATA_FILE}.tmp`;
-    await fs.promises.writeFile(tempFile, data, "utf8");
-    await fs.promises.rename(tempFile, DATA_FILE);
+
+    // Escrita atômica + backup: uma queda do processo ou corrupção do arquivo
+    // nunca deve apagar configurações, filas, Pix, tickets ou apostas salvas.
+    await fs.promises.writeFile(DATA_TMP_FILE, data, "utf8");
+
+    try {
+      if (fs.existsSync(DATA_FILE)) {
+        await fs.promises.copyFile(DATA_FILE, DATA_BACKUP_FILE);
+      }
+    } catch (backupError) {
+      console.error("⚠️ Não foi possível atualizar o backup do banco:", backupError);
+    }
+
+    await fs.promises.rename(DATA_TMP_FILE, DATA_FILE);
   } catch (error) {
     savePending = true;
     console.error("❌ Erro ao salvar o banco:", error);
@@ -250,6 +282,16 @@ function saveDatabase() {
     );
   }, 500);
 }
+
+// Salvamento de segurança periódico. Mesmo que alguma interação falhe no meio
+// de uma operação, o estado atual é persistido regularmente.
+setInterval(() => {
+  if (shutdownStarted) return;
+  savePending = true;
+  flushDatabase().catch(error =>
+    console.error("❌ Erro no salvamento periódico:", error)
+  );
+}, 30000);
 
 /* ========================================================
    FUNÇÕES UTILITÁRIAS
@@ -1959,6 +2001,52 @@ async function refreshPixPanel(guild) {
 }
 
 /* ========================================================
+   PROTEÇÃO DE INTERAÇÕES / PERMISSÕES
+======================================================== */
+
+async function safeShowModal(interaction, modal, fallback = "❌ Esta interação já foi processada. Tente novamente.") {
+  if (interaction.replied || interaction.deferred) {
+    if (interaction.deferred) {
+      return interaction.editReply({ content: fallback, embeds: [], components: [] }).catch(() => null);
+    }
+    return interaction.followUp({ content: fallback, flags: MessageFlags.Ephemeral }).catch(() => null);
+  }
+
+  try {
+    return await interaction.showModal(modal);
+  } catch (error) {
+    if (error?.code === "InteractionAlreadyReplied" || interaction.replied || interaction.deferred) {
+      if (interaction.deferred) {
+        return interaction.editReply({ content: fallback, embeds: [], components: [] }).catch(() => null);
+      }
+      return interaction.followUp({ content: fallback, flags: MessageFlags.Ephemeral }).catch(() => null);
+    }
+    throw error;
+  }
+}
+
+async function grantChannelAccess(channel, userId, permissions = {}) {
+  if (!channel || !userId) return false;
+
+  // Threads não possuem PermissionOverwriteManager. Em PrivateThread,
+  // o acesso deve ser concedido adicionando o membro à thread.
+  if (typeof channel.isThread === "function" && channel.isThread()) {
+    if (channel.members?.add) {
+      await channel.members.add(userId);
+      return true;
+    }
+    return false;
+  }
+
+  if (channel.permissionOverwrites?.edit) {
+    await channel.permissionOverwrites.edit(userId, permissions);
+    return true;
+  }
+
+  return false;
+}
+
+/* ========================================================
    INTERAÇÕES
 ======================================================== */
 
@@ -2046,7 +2134,7 @@ client.on("interactionCreate", async interaction => {
           )
         );
 
-        return interaction.showModal(modal);
+        return safeShowModal(interaction, modal);
       }
 
       /* /criar ticket */
@@ -2105,7 +2193,7 @@ client.on("interactionCreate", async interaction => {
             )
           );
 
-          return interaction.showModal(modal);
+          return safeShowModal(interaction, modal);
         }
 
         filaSetup.set(interaction.user.id, {
@@ -2166,7 +2254,7 @@ client.on("interactionCreate", async interaction => {
           new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("pix_name").setLabel("Nome do titular").setPlaceholder("Ex.: João da Silva").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(100).setValue(current.name || "")),
           new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("pix_key").setLabel("Chave Pix").setPlaceholder("CPF, CNPJ, e-mail, telefone ou chave aleatória").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(200).setValue(current.key || ""))
         );
-        return interaction.showModal(modal);
+        return safeShowModal(interaction, modal);
       }
       if (["pix_configure", "pix_edit"].includes(interaction.customId)) {
         if (!(await requireMediator(interaction))) return;
@@ -2178,7 +2266,7 @@ client.on("interactionCreate", async interaction => {
           new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("pix_name").setLabel("Nome do titular").setPlaceholder("Ex.: Gustavo Mendanha").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(100).setValue(current.name || "")),
           new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("pix_key").setLabel("Chave Pix").setPlaceholder("CPF, CNPJ, e-mail, telefone ou chave aleatória").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(200).setValue(current.key || ""))
         );
-        return interaction.showModal(modal);
+        return safeShowModal(interaction, modal);
       }
       if (interaction.customId === "pix_remove") {
         if (!(await requireMediator(interaction))) return;
@@ -2359,7 +2447,7 @@ client.on("interactionCreate", async interaction => {
           )
         );
 
-        return interaction.showModal(modal);
+        return safeShowModal(interaction, modal);
       }
 
       if (action === "config_appearance") {
@@ -2388,7 +2476,7 @@ client.on("interactionCreate", async interaction => {
           )
         );
 
-        return interaction.showModal(modal);
+        return safeShowModal(interaction, modal);
       }
 
       if (action === "config_channels") {
@@ -2575,7 +2663,7 @@ client.on("interactionCreate", async interaction => {
           )
         );
 
-        return interaction.showModal(modal);
+        return safeShowModal(interaction, modal);
       }
 
       /* ADMIN */
@@ -2604,7 +2692,7 @@ client.on("interactionCreate", async interaction => {
           )
         );
 
-        return interaction.showModal(modal);
+        return safeShowModal(interaction, modal);
       }
 
       if (action === "admin_remove") {
@@ -2625,7 +2713,7 @@ client.on("interactionCreate", async interaction => {
           )
         );
 
-        return interaction.showModal(modal);
+        return safeShowModal(interaction, modal);
       }
 
       /* FILA DE STREAMER */
@@ -2865,12 +2953,13 @@ client.on("interactionCreate", async interaction => {
         }
 
         try {
-          await privateChannel.permissionOverwrites.edit(analysis.analystId, {
+          const granted = await grantChannelAccess(privateChannel, analysis.analystId, {
             ViewChannel: true,
             SendMessages: true,
             ReadMessageHistory: true,
             ManageMessages: true
           });
+          if (!granted) throw new Error("O canal não permite conceder acesso ao Analista.");
         } catch (error) {
           analysis.analystId = null;
           console.error("❌ Não foi possível adicionar o Analista ao canal privado:", error);
@@ -2968,12 +3057,14 @@ client.on("interactionCreate", async interaction => {
         if (bet.mediatorId && bet.channelId) {
           const channel = await interaction.guild.channels.fetch(bet.channelId).catch(() => null);
           if (channel) {
-            await channel.permissionOverwrites.edit(bet.mediatorId, {
+            await grantChannelAccess(channel, bet.mediatorId, {
               ViewChannel: true,
               SendMessages: true,
               ReadMessageHistory: true,
               ManageChannels: true
-            }).catch(() => {});
+            }).catch(error => {
+              console.error("❌ Não foi possível liberar o Mediador na aposta:", error);
+            });
           }
         }
 
@@ -3260,7 +3351,7 @@ client.on("interactionCreate", async interaction => {
           )
         );
 
-        return interaction.showModal(modal);
+        return safeShowModal(interaction, modal);
       }
 
       if (action === "add") {
@@ -3956,7 +4047,7 @@ client.on("interactionCreate", async interaction => {
         if (selected === "config_fee") {
           const modal = new ModalBuilder().setCustomId("fee_modal").setTitle("Configurar taxa");
           modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("fee").setLabel("Taxa de R$0,01 até R$0,50").setPlaceholder("Ex.: 0,25").setStyle(TextInputStyle.Short).setRequired(true)));
-          return interaction.showModal(modal);
+          return safeShowModal(interaction, modal);
         }
         if (selected === "config_appearance") {
           const modal = new ModalBuilder().setCustomId("appearance_modal").setTitle("Aparência das embeds");
@@ -3964,7 +4055,7 @@ client.on("interactionCreate", async interaction => {
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("color").setLabel("Cor HEX").setPlaceholder("#5865F2").setStyle(TextInputStyle.Short).setRequired(true)),
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("image").setLabel("Foto de perfil — URL").setPlaceholder("https://...").setStyle(TextInputStyle.Short).setRequired(false))
           );
-          return interaction.showModal(modal);
+          return safeShowModal(interaction, modal);
         }
         if (selected === "config_channels") {
           return interaction.update({ content: "📢 **CANAIS DO SISTEMA**\n\nSelecione cada canal. O texto abaixo de cada opção explica sua finalidade.", components: [
@@ -4005,7 +4096,7 @@ client.on("interactionCreate", async interaction => {
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("ticket_thumbnail").setLabel("Thumbnail — URL da imagem").setPlaceholder("https://...").setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(500).setValue(c.ticketPanelThumbnail || "")),
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("ticket_color").setLabel("Cor HEX").setPlaceholder("#5865F2").setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(7).setValue(c.ticketPanelColor || c.embedColor || "#5865F2"))
           );
-          return interaction.showModal(modal);
+          return safeShowModal(interaction, modal);
         }
       }
 
@@ -4252,6 +4343,11 @@ client.on("interactionCreate", async interaction => {
     }
 
   } catch (error) {
+    if (error?.code === "InteractionAlreadyReplied") {
+      console.warn("⚠️ Interação já respondida; resposta duplicada ignorada.");
+      return;
+    }
+
     console.error("❌ ERRO NA INTERAÇÃO:", error);
 
     if (!interaction.replied && !interaction.deferred) {
@@ -4376,6 +4472,15 @@ process.on("unhandledRejection", error => {
 
 process.on("uncaughtException", error => {
   console.error("❌ Uncaught Exception:", error);
+
+  // Um processo Node pode ficar em estado inconsistente depois de uma exceção
+  // não tratada. Salvamos e encerramos para que Railway reinicie o bot limpo.
+  if (!shutdownStarted) {
+    shutdown("UNCAUGHT_EXCEPTION").catch(shutdownError => {
+      console.error("❌ Falha ao salvar antes do reinício:", shutdownError);
+      process.exit(1);
+    });
+  }
 });
 
 async function shutdown(signal) {
@@ -4413,6 +4518,48 @@ process.on("SIGTERM", () => {
     process.exit(1);
   });
 });
+
+/* ========================================================
+   WATCHDOG DE CONEXÃO
+======================================================== */
+
+let lastReadyAt = 0;
+let reconnecting = false;
+
+client.once("clientReady", () => {
+  lastReadyAt = Date.now();
+});
+
+setInterval(async () => {
+  if (shutdownStarted || reconnecting) return;
+
+  const wsStatus = client.ws?.status;
+  const ready = client.isReady?.() === true;
+
+  if (ready) {
+    lastReadyAt = Date.now();
+    return;
+  }
+
+  // Não tenta conectar novamente imediatamente: o próprio discord.js possui
+  // reconexão automática. Só intervimos se ficar desconectado por tempo longo.
+  if (lastReadyAt && Date.now() - lastReadyAt < 120000) return;
+
+  reconnecting = true;
+  console.warn(`⚠️ Bot sem conexão pronta por tempo prolongado (status ${wsStatus}). Reiniciando conexão...`);
+
+  try {
+    await client.destroy();
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    await client.login(TOKEN);
+    lastReadyAt = Date.now();
+    console.log("✅ Conexão do Discord restaurada pelo watchdog.");
+  } catch (error) {
+    console.error("❌ Falha ao restaurar a conexão do Discord:", error);
+  } finally {
+    reconnecting = false;
+  }
+}, 60000);
 
 /* ========================================================
    LOGIN
