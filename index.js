@@ -1377,11 +1377,7 @@ async function claimTicket(ticket, ticketChannel, userId, displayName) {
   }
 
   await ticketChannel.send({
-    content: `<@${userId}>`,
-    embeds: [makeEmbed("🟢 TICKET ASSUMIDO", [
-      `👤 **Responsável:** <@${userId}>`,
-      "🔧 Este atendimento está sob sua responsabilidade."
-    ].join("\n"))]
+    content: `🔧 Este ticket foi assumido por <@${userId}>.`
   }).catch(error => console.error("❌ Não foi possível enviar a confirmação:", error));
 
   return newName;
@@ -1469,28 +1465,23 @@ async function createTicketChannel(interaction, ticketType = "support") {
   saveDatabase();
 
   await thread.send({
-    content: `<@${interaction.user.id}>`,
+    content: [
+      `<@${interaction.user.id}>`,
+      responsibleRoleMentions.join(" ")
+    ].filter(Boolean).join(" "),
     embeds: [makeEmbed(`${type.emoji} TICKET DE ${type.label.toUpperCase()}`, [
       "**Atendimento privado criado.**",
       "",
       `📌 **Tipo:** ${type.label}`,
-      "👥 A equipe responsável foi notificada.",
+      "👥 Os cargos responsáveis foram marcados acima.",
       "💬 Explique sua solicitação neste ticket.",
       "⚠️ Não envie mensagens privadas para a equipe.",
       "",
-      "👤 Um responsável pode assumir o ticket pelo botão abaixo.",
+      "👤 Um responsável pode assumir o ticket pelo painel abaixo.",
       "🛠️ `.aux` abre o painel de gerenciamento."
     ].join("\n"))],
     components: ticketPanelComponents(ticket.id)
   });
-
-  // Marca todos os cargos responsáveis configurados no /config.
-  if (responsibleRoleMentions.length) {
-    await thread.send({
-      content: responsibleRoleMentions.join(" "),
-      embeds: [makeEmbed("🔔 NOVO TICKET", `Um novo atendimento de **${type.label}** está aguardando responsável.`)]
-    }).catch(() => {});
-  }
 
   return { ticket, channel: thread };
 }
@@ -1549,6 +1540,83 @@ function createPixQrUrl(name, key) {
 /* ========================================================
    CONFIGURAÇÃO
 ======================================================== */
+
+function configBackRow() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("config_back")
+      .setLabel("Voltar")
+      .setStyle(ButtonStyle.Secondary)
+  );
+}
+
+function configTeamRolesComponents() {
+  return [
+    new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder().setCustomId("set_mediator_role").setPlaceholder("👨‍⚖️ Selecionar cargo Mediador")),
+    new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder().setCustomId("set_analyst_role").setPlaceholder("🔎 Selecionar cargo Analista")),
+    new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder().setCustomId("set_streamer_role").setPlaceholder("🎥 Selecionar cargo Influencer / Streamer")),
+    configBackRow()
+  ];
+}
+
+function configTicketRoleChooserComponents() {
+  return [
+    new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId("config_ticket_role_choice")
+        .setPlaceholder("🎫 Escolha qual cargo deseja configurar")
+        .addOptions([
+          { label: "Suporte", value: "support", emoji: "🛠️", description: "Cargo responsável pelo Suporte." },
+          { label: "Supervisor", value: "supervisor", emoji: "👔", description: "Cargo responsável pela Supervisão." },
+          { label: "Auxiliar", value: "auxiliary", emoji: "🔧", description: "Cargo responsável pelo atendimento Auxiliar." },
+          { label: "Diretor", value: "director", emoji: "🧭", description: "Cargo responsável pela Direção." },
+          { label: "Sub Don", value: "subdon", emoji: "👑", description: "Cargo responsável pelo Sub Don." }
+        ])
+    ),
+    configBackRow()
+  ];
+}
+
+function configTicketRoleSelectComponents(roleType) {
+  const map = {
+    support: ["set_support_role", "🛠️ Selecionar cargo Suporte"],
+    supervisor: ["set_supervisor_role", "👔 Selecionar cargo Supervisor"],
+    auxiliary: ["set_auxiliary_role", "🔧 Selecionar cargo Auxiliar"],
+    director: ["set_director_role", "🧭 Selecionar cargo Diretor"],
+    subdon: ["set_subdon_role", "👑 Selecionar cargo Sub Don"]
+  };
+  const [customId, placeholder] = map[roleType] || map.support;
+  return [
+    new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder().setCustomId(customId).setPlaceholder(placeholder)),
+    configBackRow()
+  ];
+}
+
+function configSystemChannelsComponents() {
+  return [
+    new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("channel_ssmob").setPlaceholder("📱 Canal das solicitações .ssmob").setChannelTypes(ChannelType.GuildText)),
+    new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("channel_ssemu").setPlaceholder("🖥️ Canal das solicitações .ssemu").setChannelTypes(ChannelType.GuildText)),
+    new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("channel_mediator_queue").setPlaceholder("👨‍⚖️ Canal da fila de Mediadores").setChannelTypes(ChannelType.GuildText)),
+    configBackRow()
+  ];
+}
+
+function configTicketChannelsComponents() {
+  return [
+    new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("ticket_channel_support").setPlaceholder("🛠️ Canal — Suporte").setChannelTypes(ChannelType.GuildText)),
+    new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("ticket_channel_refund").setPlaceholder("💰 Canal — Reembolso").setChannelTypes(ChannelType.GuildText)),
+    new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("ticket_channel_vacancies").setPlaceholder("📋 Canal — Vagas").setChannelTypes(ChannelType.GuildText)),
+    new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("ticket_channel_event").setPlaceholder("🎉 Canal — Receber Evento").setChannelTypes(ChannelType.GuildText)),
+    configBackRow()
+  ];
+}
+
+function configSingleChannelComponents(customId, placeholder, channelType = ChannelType.GuildText) {
+  return [
+    new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId(customId).setPlaceholder(placeholder).setChannelTypes(channelType)),
+    configBackRow()
+  ];
+}
 
 function configButtons() {
   return [
@@ -2330,24 +2398,7 @@ client.on("interactionCreate", async interaction => {
 
         return interaction.reply({
           content: "👥 Selecione os cargos que serão usados pelo bot:",
-          components: [
-            new ActionRowBuilder().addComponents(
-              new RoleSelectMenuBuilder()
-                .setCustomId("set_mediator_role")
-                .setPlaceholder("Selecionar cargo Mediador")
-            ),
-            new ActionRowBuilder().addComponents(
-              new RoleSelectMenuBuilder()
-                .setCustomId("set_analyst_role")
-                .setPlaceholder("Selecionar cargo Analista")
-            )
-            ,
-            new ActionRowBuilder().addComponents(
-              new RoleSelectMenuBuilder()
-                .setCustomId("set_streamer_role")
-                .setPlaceholder("Selecionar cargo Influencer / Streamer")
-            )
-          ],
+          components: configTeamRolesComponents(),
           flags: MessageFlags.Ephemeral
         });
       }
@@ -2357,33 +2408,7 @@ client.on("interactionCreate", async interaction => {
 
         return interaction.reply({
           content: "🎫 Configure os cargos que poderão atender e administrar os tickets:",
-          components: [
-            new ActionRowBuilder().addComponents(
-              new RoleSelectMenuBuilder()
-                .setCustomId("set_support_role")
-                .setPlaceholder("Selecionar cargo Suporte")
-            ),
-            new ActionRowBuilder().addComponents(
-              new RoleSelectMenuBuilder()
-                .setCustomId("set_supervisor_role")
-                .setPlaceholder("Selecionar cargo Supervisor")
-            ),
-            new ActionRowBuilder().addComponents(
-              new RoleSelectMenuBuilder()
-                .setCustomId("set_auxiliary_role")
-                .setPlaceholder("Selecionar cargo Auxiliar")
-            ),
-            new ActionRowBuilder().addComponents(
-              new RoleSelectMenuBuilder()
-                .setCustomId("set_director_role")
-                .setPlaceholder("Selecionar cargo Diretor")
-            ),
-            new ActionRowBuilder().addComponents(
-              new RoleSelectMenuBuilder()
-                .setCustomId("set_subdon_role")
-                .setPlaceholder("Selecionar cargo Sub Don")
-            )
-          ],
+          components: configTicketRoleChooserComponents(),
           flags: MessageFlags.Ephemeral
         });
       }
@@ -3291,11 +3316,7 @@ client.on("interactionCreate", async interaction => {
 
           await claimTicket(ticket, ticketChannel, interaction.user.id, displayName);
 
-          return interaction.editReply({
-            content: "✅ Você assumiu este ticket. Os demais responsáveis perderam o acesso ao atendimento.",
-            embeds: [],
-            components: ticketPanelComponents(ticket.id, interaction.user.id)
-          });
+          return;
         } catch (error) {
           console.error("❌ Erro ao assumir ticket pelo painel:", error);
           if (interaction.deferred || interaction.replied) {
@@ -3415,10 +3436,7 @@ client.on("interactionCreate", async interaction => {
         saveDatabase();
 
         await ticketChannel.send({
-          embeds: [makeEmbed("👤 MEMBRO ADICIONADO", [
-            `**${member}** foi adicionado ao ticket.`,
-            `🛠️ **Adicionado por:** <@${interaction.user.id}>`
-          ].join("\n"))]
+          content: `👤 ${member} foi adicionado ao ticket por <@${interaction.user.id}>.`
         }).catch(() => {});
 
         return interaction.update({
@@ -3432,6 +3450,27 @@ client.on("interactionCreate", async interaction => {
           "❌ Não foi possível adicionar esse membro. Verifique a permissão Gerenciar Canais do bot."
         );
       }
+    }
+
+    /* ----------------------------------------------------
+       ESCOLHA DO CARGO DOS TICKETS
+    ---------------------------------------------------- */
+
+    if (interaction.isStringSelectMenu() && interaction.customId === "config_ticket_role_choice") {
+      if (!(await requireAdmin(interaction))) return;
+      const roleType = interaction.values[0];
+      const labels = {
+        support: "🛠️ **SUPORTE**",
+        supervisor: "👔 **SUPERVISOR**",
+        auxiliary: "🔧 **AUXILIAR**",
+        director: "🧭 **DIRETOR**",
+        subdon: "👑 **SUB DON**"
+      };
+      return interaction.update({
+        content: `🎫 **CARGOS DOS TICKETS**\n\n${labels[roleType] || "🎫 **CARGO**"}\n\nSelecione agora o cargo do Discord que exercerá esta função. Depois de salvar, você continuará no painel de configuração dos tickets.`,
+        embeds: [],
+        components: configTicketRoleSelectComponents(roleType)
+      });
     }
 
     /* ----------------------------------------------------
@@ -3477,8 +3516,38 @@ client.on("interactionCreate", async interaction => {
 
       saveDatabase();
 
+      const isTicketRole = [
+        "set_support_role",
+        "set_supervisor_role",
+        "set_auxiliary_role",
+        "set_director_role",
+        "set_subdon_role"
+      ].includes(interaction.customId);
+
+      const isTeamRole = [
+        "set_mediator_role",
+        "set_analyst_role",
+        "set_streamer_role"
+      ].includes(interaction.customId);
+
+      if (isTicketRole) {
+        return interaction.update({
+          content: "🎫 **CARGOS DOS TICKETS**\n\nCargo salvo. Continue configurando os outros cargos ou use **Voltar** para retornar ao menu principal.",
+          embeds: [],
+          components: configTicketRoleChooserComponents()
+        });
+      }
+
+      if (isTeamRole) {
+        return interaction.update({
+          content: "👥 **CARGOS DA EQUIPE**\n\nCargo salvo. Continue configurando os outros cargos ou use **Voltar** para retornar ao menu principal.",
+          embeds: [],
+          components: configTeamRolesComponents()
+        });
+      }
+
       return interaction.update({
-        content: "✅ **Cargo configurado com sucesso.**\n\nVocê pode continuar configurando o restante do bot abaixo.",
+        content: "✅ **Cargo configurado com sucesso.**",
         embeds: [configEmbed()],
         components: configButtons()
       });
@@ -3626,8 +3695,41 @@ client.on("interactionCreate", async interaction => {
       }
 
       saveDatabase();
+
+      if (["channel_ssmob", "channel_ssemu", "channel_mediator_queue"].includes(interaction.customId)) {
+        return interaction.update({
+          content: "📢 **CANAIS DO SISTEMA**\n\nCanal salvo. Continue configurando os outros canais ou use **Voltar** para retornar ao menu principal.",
+          embeds: [],
+          components: configSystemChannelsComponents()
+        });
+      }
+
+      if (["ticket_channel_support", "ticket_channel_refund", "ticket_channel_vacancies", "ticket_channel_event"].includes(interaction.customId)) {
+        return interaction.update({
+          content: "📢 **CANAIS DOS TICKETS**\n\nCanal salvo. Continue configurando os outros canais ou use **Voltar** para retornar ao menu principal.",
+          embeds: [],
+          components: configTicketChannelsComponents()
+        });
+      }
+
+      if (interaction.customId === "bet_channel") {
+        return interaction.update({
+          content: "🎮 **CANAL DAS APOSTAS**\n\nCanal salvo. Use **Voltar** para retornar ao menu principal.",
+          embeds: [],
+          components: configSingleChannelComponents("bet_channel", "🎮 Selecionar canal das apostas")
+        });
+      }
+
+      if (interaction.customId === "streamer_category") {
+        return interaction.update({
+          content: "🎥 **CATEGORIA STREAMER**\n\nCategoria salva. Use **Voltar** para retornar ao menu principal.",
+          embeds: [],
+          components: configSingleChannelComponents("streamer_category", "🎥 Selecionar categoria Streamer", ChannelType.GuildCategory)
+        });
+      }
+
       return interaction.update({
-        content: "✅ **Configuração salva com sucesso.**\n\nVocê pode continuar configurando o restante do bot abaixo.",
+        content: "✅ **Configuração salva com sucesso.**",
         embeds: [configEmbed()],
         components: configButtons()
       });
@@ -4033,18 +4135,10 @@ client.on("interactionCreate", async interaction => {
         }
 
         if (selected === "config_roles") {
-          return interaction.update({ content: "👥 **CARGOS DA EQUIPE**\n\nConfigure abaixo cada cargo usado pelo bot. Essas funções controlam quem pode atuar como Mediador, Analista ou Streamer.", components: [
-            new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder().setCustomId("set_mediator_role").setPlaceholder("👨‍⚖️ Selecionar cargo Mediador")),
-            new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder().setCustomId("set_analyst_role").setPlaceholder("🔎 Selecionar cargo Analista")),
-            new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder().setCustomId("set_streamer_role").setPlaceholder("🎥 Selecionar cargo Influencer / Streamer"))
-          ]});
+          return interaction.update({ content: "👥 **CARGOS DA EQUIPE**\n\nConfigure cada cargo. Depois de escolher um cargo, você continuará nesta tela. Use **Voltar** para retornar ao menu principal.", components: configTeamRolesComponents() });
         }
         if (selected === "config_support_roles") {
-          return interaction.update({ content: "🎫 **CARGOS DOS TICKETS**\n\nDefina quais cargos poderão visualizar e administrar os atendimentos de Suporte.", components: [
-            new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder().setCustomId("set_support_role").setPlaceholder("🛠️ Selecionar cargo Suporte")),
-            new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder().setCustomId("set_supervisor_role").setPlaceholder("👔 Selecionar cargo Supervisor")),
-            new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder().setCustomId("set_auxiliary_role").setPlaceholder("🔧 Selecionar cargo Auxiliar"))
-          ]});
+          return interaction.update({ content: "🎫 **CARGOS DOS TICKETS**\n\nEscolha qual dos 5 cargos deseja configurar. Depois de salvar, você continuará nesta área. Use **Voltar** para retornar ao menu principal.", components: configTicketRoleChooserComponents() });
         }
         if (selected === "config_admins") {
           return interaction.update({ content: `👑 **ADMINISTRADORES**\n\nAdministradores cadastrados: **${db.config.admins.length}/20**\n\nUse os botões abaixo para adicionar ou remover administradores.`, embeds: [makeEmbed("👑 ADMINISTRADORES", db.config.admins.length ? db.config.admins.map((id,i)=>`**${i+1}.** <@${id}>`).join("\n") : "_Nenhum ADM cadastrado._")], components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId("admin_add").setLabel("Cadastrar ADM").setEmoji("➕").setStyle(ButtonStyle.Success), new ButtonBuilder().setCustomId("admin_remove").setLabel("Remover ADM").setEmoji("➖").setStyle(ButtonStyle.Danger))]});
@@ -4063,17 +4157,13 @@ client.on("interactionCreate", async interaction => {
           return safeShowModal(interaction, modal);
         }
         if (selected === "config_channels") {
-          return interaction.update({ content: "📢 **CANAIS DO SISTEMA**\n\nSelecione cada canal. O texto abaixo de cada opção explica sua finalidade.", components: [
-            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("channel_ssmob").setPlaceholder("📱 Canal das solicitações .ssmob").setChannelTypes(ChannelType.GuildText)),
-            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("channel_ssemu").setPlaceholder("🖥️ Canal das solicitações .ssemu").setChannelTypes(ChannelType.GuildText)),
-            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("channel_mediator_queue").setPlaceholder("👨‍⚖️ Canal da fila de Mediadores").setChannelTypes(ChannelType.GuildText))
-          ]});
+          return interaction.update({ content: "📢 **CANAIS DO SISTEMA**\n\nConfigure cada canal. Depois de escolher um canal, você continuará nesta tela. Use **Voltar** para retornar ao menu principal.", components: configSystemChannelsComponents() });
         }
         if (selected === "config_bet_channel") {
-          return interaction.update({ content: "🎮 **CANAL DAS APOSTAS**\n\nEscolha o canal onde cada aposta será criada como uma thread privada.\n\n🔒 O Mediador responsável só terá acesso depois que os 2 jogadores confirmarem.\n👤 Cada aposta terá apenas 1 Mediador responsável.", components: [new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("bet_channel").setPlaceholder("🎮 Selecionar canal das apostas").setChannelTypes(ChannelType.GuildText))]});
+          return interaction.update({ content: "🎮 **CANAL DAS APOSTAS**\n\nEscolha o canal onde cada aposta será criada como uma thread privada.\n\n🔒 O Mediador responsável só terá acesso depois que os 2 jogadores confirmarem.\n👤 Cada aposta terá apenas 1 Mediador responsável.\n\nUse **Voltar** para retornar ao menu principal.", components: configSingleChannelComponents("bet_channel", "🎮 Selecionar canal das apostas") });
         }
         if (selected === "config_streamer_category") {
-          return interaction.update({ content: "🎥 **CATEGORIA STREAMER**\n\nEscolha a categoria onde os canais das filas de Streamer serão criados.", components: [new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("streamer_category").setPlaceholder("🎥 Selecionar categoria Streamer").setChannelTypes(ChannelType.GuildCategory))]});
+          return interaction.update({ content: "🎥 **CATEGORIA STREAMER**\n\nEscolha a categoria onde os canais das filas de Streamer serão criados.\n\nUse **Voltar** para retornar ao menu principal.", components: configSingleChannelComponents("streamer_category", "🎥 Selecionar categoria Streamer", ChannelType.GuildCategory) });
         }
         if (selected === "config_mediator_queue") {
           if (!db.config.mediatorQueueChannelId) return deny(interaction, "❌ Primeiro configure o canal da fila de Mediadores.");
@@ -4084,12 +4174,7 @@ client.on("interactionCreate", async interaction => {
           return interaction.update({ content: "✅ **Fila de Mediadores publicada/atualizada com sucesso.**", components: configButtons(), embeds: [] });
         }
         if (selected === "config_ticket_channels") {
-          return interaction.update({ content: "📢 **CANAIS DOS TICKETS**\n\nEscolha o canal correspondente a cada tipo de atendimento.", components: [
-            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("ticket_channel_support").setPlaceholder("🛠️ Canal — Suporte").setChannelTypes(ChannelType.GuildText)),
-            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("ticket_channel_refund").setPlaceholder("💰 Canal — Reembolso").setChannelTypes(ChannelType.GuildText)),
-            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("ticket_channel_vacancies").setPlaceholder("📋 Canal — Vagas").setChannelTypes(ChannelType.GuildText)),
-            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId("ticket_channel_event").setPlaceholder("🎉 Canal — Receber Evento").setChannelTypes(ChannelType.GuildText))
-          ]});
+          return interaction.update({ content: "📢 **CANAIS DOS TICKETS**\n\nEscolha o canal correspondente a cada tipo de atendimento. Depois de escolher um canal, você continuará nesta tela. Use **Voltar** para retornar ao menu principal.", components: configTicketChannelsComponents() });
         }
         if (selected === "config_ticket_panel") {
           const c = db.config;
