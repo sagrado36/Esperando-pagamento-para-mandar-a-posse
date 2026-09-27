@@ -1968,7 +1968,8 @@ function pixPanelPayload() {
     lines.push("❌ Nenhum Pix cadastrado.");
   } else {
     for (const [userId, pix] of entries) {
-      lines.push(`• **${pix.name || "Sem nome"}** — <@${userId}>`);
+      const editedLabel = pix?.edited ? " — **Editado**" : "";
+      lines.push(`• **${pix.name || "Sem nome"}**${editedLabel} — <@${userId}>`);
     }
   }
 
@@ -1976,10 +1977,9 @@ function pixPanelPayload() {
     embeds: [makeEmbed("💳 PAINEL DE CADASTRO PIX", lines.join("\n"))],
     components: [
       new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId("pix_register_self").setLabel("Cadastrar meu Pix").setEmoji("💳").setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId("pix_configure").setLabel("Configurar Pix").setEmoji("⚙️").setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId("pix_edit").setLabel("Editar Pix").setEmoji("✏️").setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId("pix_remove").setLabel("Remover Cadastro").setEmoji("🗑️").setStyle(ButtonStyle.Danger)
+        new ButtonBuilder().setCustomId("pix_remove").setLabel("Remover Pix").setEmoji("🗑️").setStyle(ButtonStyle.Danger)
       )
     ]
   };
@@ -2245,17 +2245,6 @@ client.on("interactionCreate", async interaction => {
     ---------------------------------------------------- */
 
     if (interaction.isButton()) {
-      if (interaction.customId === "pix_register_self") {
-        const current = db.pix?.[interaction.user.id] || {};
-        const modal = new ModalBuilder()
-          .setCustomId("pix_register_panel")
-          .setTitle(current.name ? "Editar meu Pix" : "Cadastrar meu Pix");
-        modal.addComponents(
-          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("pix_name").setLabel("Nome do titular").setPlaceholder("Ex.: João da Silva").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(100).setValue(current.name || "")),
-          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("pix_key").setLabel("Chave Pix").setPlaceholder("CPF, CNPJ, e-mail, telefone ou chave aleatória").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(200).setValue(current.key || ""))
-        );
-        return safeShowModal(interaction, modal);
-      }
       if (["pix_configure", "pix_edit"].includes(interaction.customId)) {
         if (!(await requireMediator(interaction))) return;
         const current = db.pix?.[interaction.user.id] || {};
@@ -2270,12 +2259,19 @@ client.on("interactionCreate", async interaction => {
       }
       if (interaction.customId === "pix_remove") {
         if (!(await requireMediator(interaction))) return;
+
+        // Remove somente o cadastro do usuário. O painel original permanece
+        // no canal e é atualizado para retirar apenas o nome desta pessoa.
         delete db.pix[interaction.user.id];
         saveDatabase();
-        return interaction.update({
-          embeds: [makeEmbed("💳 CADASTRO PIX", "🗑️ **Seu cadastro Pix foi removido.**")],
-          components: []
-        });
+
+        await interaction.deferUpdate().catch(() => {});
+        await refreshPixPanel(interaction.guild).catch(() => {});
+
+        return interaction.followUp({
+          content: "🗑️ Seu cadastro Pix foi removido do painel.",
+          flags: MessageFlags.Ephemeral
+        }).catch(() => {});
       }
       if (interaction.customId === "pix_remove_old") {
         if (!(await requireMediator(interaction))) return;
@@ -3863,11 +3859,14 @@ client.on("interactionCreate", async interaction => {
 
         const qr = createPixQrUrl(name, key);
         db.pix = db.pix || {};
+        const previous = db.pix[interaction.user.id];
         db.pix[interaction.user.id] = {
           name,
           key,
           qr,
-          updatedAt: Date.now()
+          updatedAt: Date.now(),
+          // Só marca "Editado" quando já existia um cadastro anterior.
+          edited: Boolean(previous)
         };
 
         saveDatabase();
@@ -3876,15 +3875,21 @@ client.on("interactionCreate", async interaction => {
         // pelo /painel cadastro, sem exigir que alguém execute o comando novamente.
         await refreshPixPanel(interaction.guild).catch(() => {});
 
+        const actionText = previous
+          ? "✏️ **Cadastro Pix editado com sucesso.**"
+          : "✅ **Cadastro Pix realizado com sucesso.**";
+
         const e = makeEmbed("💳 CADASTRO PIX", [
-          "✅ **Cadastro realizado com sucesso.**",
+          actionText,
           "",
           `👤 **Titular:** ${name}`,
           `🔑 **Chave Pix:** \`${key}\``,
           `🪪 **Discord:** <@${interaction.user.id}>`,
           "",
           "🧾 **QR Code:** gerado automaticamente.",
-          "📌 O nome já foi marcado no painel de Cadastro Pix."
+          previous
+            ? "📌 O nome foi atualizado no painel e está marcado como **Editado**."
+            : "📌 O nome foi adicionado automaticamente ao painel de Cadastro Pix."
         ].join("\n"));
 
         e.setImage(qr);
